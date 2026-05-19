@@ -2,6 +2,15 @@
 // 匯洲工單系統 - 共用工具
 // ===========================================================
 
+// ===== PWA Service Worker 註冊（讓網站可被安裝為桌面 App）=====
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(err =>
+      console.warn('Service Worker 註冊失敗:', err)
+    );
+  });
+}
+
 // ===== 常數 =====
 const LOCATION_LABEL = {
   zhongli_cs: '中壢客服',

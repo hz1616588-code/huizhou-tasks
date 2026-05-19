@@ -1,0 +1,17 @@
+{
+  "name": "匯洲工單 - 客服",
+  "short_name": "匯洲工單",
+  "description": "匯洲國際工單系統 · 中壢/龍潭客服端",
+  "start_url": "cs.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1E2A47",
+  "theme_color": "#1E2A47",
+  "orientation": "any",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
