@@ -426,10 +426,14 @@ function setupNotifPanelToggle(bellBtn, panel) {
 // 渲染對話區塊（包含 toggle、訊息列表、輸入區）
 function renderCommentsSection(task, commentCount = 0) {
   const locked = task.status === 'cancelled';
+  const hasComments = commentCount > 0;
+  const labelText = hasComments
+    ? `對話討論 <span class="comments-count">${commentCount}</span> 則`
+    : `<span class="comments-label">點我對話討論</span><span class="comments-hint">— 客服 ⇄ 倉管 可即時互傳訊息與照片</span> <span class="comments-count">0</span>`;
   return `
     <div class="comments-section" data-task-id="${task.id}">
       <button type="button" class="comments-toggle">
-        💬 對話 <span class="comments-count">${commentCount}</span>
+        ${labelText}
       </button>
       <div class="comments-body">
         <div class="comment-list">
@@ -557,7 +561,9 @@ function bindCommentsEvents(cardEl, opts = {}) {
 
   toggle?.addEventListener('click', async () => {
     body.classList.toggle('open');
-    if (body.classList.contains('open')) {
+    const isOpen = body.classList.contains('open');
+    toggle.classList.toggle('is-open', isOpen);
+    if (isOpen) {
       if (!loaded) {
         loaded = true;
         await loadCommentsForCard(cardEl);
