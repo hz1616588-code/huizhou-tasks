@@ -24,22 +24,21 @@
 3. 點 **Create new project**
 4. 等大概 2 分鐘讓專案建立完成
 
-### 3. 跑 SQL 建立資料表
+### 3. 啟用 pg_cron（先做這步比較順）
+
+1. 左側選單點 **Database** → **Extensions**
+2. 搜尋 `pg_cron`
+3. 點旁邊的開關啟用
+4. （若不啟用也沒關係，setup.sql 會自動略過 cron，但舊資料就不會自動清理）
+
+### 4. 跑 SQL 建立資料表
 
 1. 左側選單點 **SQL Editor**
 2. 點右上 **+ New query**
 3. 用文字編輯器打開 `setup.sql`，**複製全部內容**
 4. 貼到 Supabase 的 SQL Editor
 5. 點右下 **Run**（綠色按鈕）
-6. ⚠️ 第一次 Run 會卡在 `cron.schedule` 那段報錯 → 沒關係，先到下一步
-
-### 4. 啟用 pg_cron（自動清理舊資料）
-
-1. 左側選單點 **Database** → **Extensions**
-2. 搜尋 `pg_cron`
-3. 點旁邊的開關啟用
-4. 回到 SQL Editor，再跑一次 setup.sql 最後的 `cron.schedule(...)` 那段
-5. 完成
+6. 看到 "Success" 就完成了。本 SQL 可重複執行，**之後若有改 schema 需要重跑也不會壞**
 
 ### 5. 建立照片儲存空間
 
@@ -148,7 +147,56 @@ const SUPABASE_ANON_KEY = '請填入你的anon-public-key';
 
 ## 之後新人來怎麼辦？
 
-**完全不用碰 Supabase。** 你進 `admin.html` → **人員管理** → 填姓名 + 選部門 → 按「新增員工」就完成。
+員工管理（新增、停用、改名）統一在 **Supabase Table Editor** 操作。為什麼不在 admin.html 做？因為本系統 anon key 沒有密碼保護，若把員工管理放網頁上，任何拿到網址的人都能透過瀏覽器 console 把自己改成管理員。改在 Supabase Dashboard 用 service_role 操作較安全。
+
+### 操作步驟
+
+1. 進入 [supabase.com/dashboard](https://supabase.com/dashboard) 登入
+2. 選 `huizhou-tasks` 專案
+3. 左側 **Table Editor** → 點 `users` 表
+4. **新增**：右上 **Insert** → **Insert row**
+   - `name`：員工姓名
+   - `location`：四選一
+     - `zhongli_cs` = 中壢客服
+     - `longtan_cs` = 龍潭客服
+     - `longtan_wh` = 龍潭倉管
+     - `admin` = 管理員
+   - `active`：預設 true（在職）
+   - 其他欄位留空，按 Save
+5. **停用**（離職）：點該列任一格 → 把 `active` 改成 `false` → Enter 存檔
+   - ⚠️ 為了保留歷史紀錄，不要直接刪除員工
+6. **改名**：直接點 `name` 欄改字 → Enter
+7. 員工立刻可以用新身份打開頁面，不需重整網站
+
+admin.html 的「員工清單」分頁可以即時看到目前所有員工狀態（唯讀）。
+
+---
+
+## 安全模型聲明（重要，請小瀾務必看完）
+
+本系統採「**內網信任 + 網址不外流**」模型，**不是真正的權限控制**：
+
+| 項目 | 真實狀況 |
+|---|---|
+| 客服 / 倉管 / 管理員 | 只是 UI 上的分流，**不是密碼權限** |
+| 任何人取得網址 | 都能進入對應頁面、選任一身份 |
+| 任何人取得網址 | 都能透過瀏覽器 console 用 anon key 讀寫 tasks、notification_reads |
+| 唯一鎖死的 | `users` 表（anon 只能讀不能寫）— 所以員工管理必須走 Supabase Dashboard |
+
+### 這代表什麼
+
+- ✅ 適合：5 人內部團隊、網址只給自己人、信任所有員工
+- ❌ 不適合：對外開放、有離職員工要立刻封鎖存取、合規要求稽核軌跡
+- 🔒 加強建議（未來可做）：
+  - 加 Cloudflare Access 或 Vercel Password Protect（最簡單）
+  - 改用 Supabase Auth 真正登入（需重寫頁面，工程量大）
+
+### 員工離職時要做的事
+
+1. 進 Supabase Table Editor → `users` 表 → 把該員工 `active` 改 false
+2. **網址沒換 → 該員工仍可以打開頁面**，但選不到自己的身份（active=false 不會出現）
+3. 若想要更嚴格：把該員工的舊 `huizhou_user_id` 從他電腦的 localStorage 清掉，但他若記得網址仍可重新選別人
+4. 真的擔心 → 換掉網址（建新的 GitHub Pages repo）或開啟 Cloudflare Access
 
 ---
 

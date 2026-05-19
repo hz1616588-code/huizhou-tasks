@@ -5,9 +5,12 @@
 --   1. 進入 Supabase Dashboard → SQL Editor → New query
 --   2. 把整份貼進去
 --   3. 按 Run（右下角綠色按鈕）
---   4. 看到 "Success. No rows returned" 就完成了
+--   4. 看到 "Success" 就完成了
+--
+-- ⭐ 本檔可重複執行：任何時候重跑都不會壞掉，會自動略過已存在的物件
 --
 -- 注意：執行前請先到 Storage 建立名為 task-photos 的 bucket（Public 要勾）
+--      若要 cron 自動清理舊資料，請先到 Database → Extensions 啟用 pg_cron
 -- ===========================================================
 
 -- 啟用 UUID 產生器
@@ -15,6 +18,10 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================
 -- ① 使用者表（員工名單）
+-- ============================================
+-- ⚠️ 員工管理：請至 Supabase Dashboard → Table Editor → users
+-- 前端（admin.html）僅顯示員工清單，不提供新增/停用/改名，
+-- 以避免匿名 anon key 透過 console 修改員工資料。
 -- ============================================
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -27,7 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_location_active ON users(location, active);
 
--- 預先建立實際員工（5 位）
+-- 預先建立實際員工（5 位）— 之後新增請進 Table Editor
 INSERT INTO users (name, location) VALUES
   ('小瀾',     'admin'),
   ('元寶',     'zhongli_cs'),
@@ -69,6 +76,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority_status ON tasks(priority, status) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
 CREATE INDEX IF NOT EXISTS idx_tasks_completed_at ON tasks(completed_at DESC) WHERE status = 'done';
+CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by_user_id);
+
+-- 讓 Realtime UPDATE 事件包含舊資料（用來判斷 status 是不是「剛變成 done/cancelled」）
+ALTER TABLE tasks REPLICA IDENTITY FULL;
 
 -- updated_at 自動更新
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -98,11 +109,21 @@ CREATE TABLE IF NOT EXISTS notification_reads (
 CREATE INDEX IF NOT EXISTS idx_notif_reads_user ON notification_reads(user_id, event_type);
 
 -- ============================================
--- ④ 啟用 Realtime（即時推送）
+-- ④ 啟用 Realtime（可重複執行）
 -- ============================================
-ALTER PUBLICATION supabase_realtime ADD TABLE tasks;
-ALTER PUBLICATION supabase_realtime ADD TABLE notification_reads;
-ALTER PUBLICATION supabase_realtime ADD TABLE users;
+DO $$
+DECLARE
+  t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['tasks', 'notification_reads'] LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_publication_tables
+      WHERE pubname = 'supabase_realtime' AND tablename = t
+    ) THEN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE %I', t);
+    END IF;
+  END LOOP;
+END $$;
 
 -- ============================================
 -- ⑤ Row Level Security（RLS）
@@ -111,17 +132,16 @@ ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_reads ENABLE ROW LEVEL SECURITY;
 
--- users：任何人可讀、可改（admin 在頁面內管理）
+-- ===== users：只開放讀取 =====
+-- ⚠️ 不開放 INSERT/UPDATE/DELETE 給 anon。員工管理請進 Supabase Table Editor。
 DROP POLICY IF EXISTS "users_read" ON users;
 CREATE POLICY "users_read" ON users FOR SELECT USING (true);
 
+-- 移除可能存在的舊版本寫入權限（修正以前版本錯誤開放的權限）
 DROP POLICY IF EXISTS "users_insert" ON users;
-CREATE POLICY "users_insert" ON users FOR INSERT WITH CHECK (true);
-
 DROP POLICY IF EXISTS "users_update" ON users;
-CREATE POLICY "users_update" ON users FOR UPDATE USING (true) WITH CHECK (true);
 
--- tasks：任何人可讀、可新增、可更新（不可刪除）
+-- ===== tasks：任何人可讀、可新增、可更新（不可刪除）=====
 DROP POLICY IF EXISTS "tasks_read" ON tasks;
 CREATE POLICY "tasks_read" ON tasks FOR SELECT USING (true);
 
@@ -130,14 +150,17 @@ CREATE POLICY "tasks_insert" ON tasks FOR INSERT WITH CHECK (true);
 
 DROP POLICY IF EXISTS "tasks_update" ON tasks;
 CREATE POLICY "tasks_update" ON tasks FOR UPDATE USING (true) WITH CHECK (true);
--- 不建立 DELETE policy 等同禁止刪除
+-- 不建立 DELETE policy 等同禁止刪除（過期資料由 cron 用 service_role 清理）
 
--- notification_reads：任何人可讀、可寫、可刪
+-- ===== notification_reads：讀、寫、改、刪都開（upsert 需要 UPDATE 權限）=====
 DROP POLICY IF EXISTS "notif_read" ON notification_reads;
 CREATE POLICY "notif_read" ON notification_reads FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "notif_insert" ON notification_reads;
 CREATE POLICY "notif_insert" ON notification_reads FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "notif_update" ON notification_reads;
+CREATE POLICY "notif_update" ON notification_reads FOR UPDATE USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "notif_delete" ON notification_reads;
 CREATE POLICY "notif_delete" ON notification_reads FOR DELETE USING (true);
@@ -155,18 +178,26 @@ CREATE POLICY "photos_upload" ON storage.objects
   FOR INSERT WITH CHECK (bucket_id = 'task-photos');
 
 -- ============================================
--- ⑦ 自動清理 cron（3 個月）
+-- ⑦ 自動清理 cron（每天凌晨 3 點清 3 個月前完成/作廢的工單）
 -- ============================================
--- ⚠️ 執行前先到 Database → Extensions 啟用 pg_cron 擴充
--- 每天凌晨 3 點清掉 3 個月前已完成或已作廢的工單
--- （ON DELETE CASCADE 會自動清理對應的 notification_reads）
-SELECT cron.schedule(
-  'cleanup_old_tasks',
-  '0 3 * * *',
-  $$DELETE FROM tasks
-    WHERE status IN ('done','cancelled')
-      AND COALESCE(completed_at, cancelled_at) < NOW() - INTERVAL '3 months'$$
-);
+-- ⭐ 可重複執行：若已存在會先 unschedule 再 schedule
+-- ⚠️ 需先到 Database → Extensions 啟用 pg_cron。若尚未啟用，此區塊會略過並提示
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cleanup_old_tasks') THEN
+      PERFORM cron.unschedule('cleanup_old_tasks');
+    END IF;
+    PERFORM cron.schedule(
+      'cleanup_old_tasks',
+      '0 3 * * *',
+      'DELETE FROM tasks WHERE status IN (''done'',''cancelled'') AND COALESCE(completed_at, cancelled_at) < NOW() - INTERVAL ''3 months'''
+    );
+    RAISE NOTICE 'cron 已排程：每天 03:00 清理 3 個月前完成/作廢的工單';
+  ELSE
+    RAISE NOTICE 'pg_cron 尚未啟用。請至 Database → Extensions 啟用 pg_cron 後重新執行此 SQL（其他部分不影響）';
+  END IF;
+END $$;
 
 -- ============================================
 -- 完成！
@@ -174,4 +205,5 @@ SELECT cron.schedule(
 -- 確認方式：
 --   1. Table Editor 應該看到 users / tasks / notification_reads 三張表
 --   2. users 表應該有 5 筆資料（小瀾、元寶、純純、小梁、倉管大哥）
---   3. Database → Cron Jobs 應該看到 cleanup_old_tasks
+--   3. Database → Cron Jobs（pg_cron 啟用後）應該看到 cleanup_old_tasks
+--   4. Authentication → Policies 應看到 users 只有 SELECT、tasks 有讀寫、notif_reads 全開

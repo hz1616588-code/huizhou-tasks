@@ -116,29 +116,26 @@
     </div>
   </section>
 
-  <!-- Tab 3: 人員管理 -->
+  <!-- Tab 3: 人員管理（唯讀，新增/停用請進 Supabase Table Editor）-->
   <section class="tab-panel" data-panel="users">
     <div class="section">
-      <h3 class="section-title">👥 員工管理</h3>
-      <form id="newUserForm" class="filter-row" style="background:var(--cream);border:1px dashed var(--accent)">
-        <div class="form-group">
-          <label>姓名 <span class="required">*</span></label>
-          <input class="form-control" name="name" required placeholder="例：小華">
-        </div>
-        <div class="form-group">
-          <label>部門 <span class="required">*</span></label>
-          <select class="form-control" name="location" required>
-            <option value="zhongli_cs">🔵 中壢客服</option>
-            <option value="longtan_cs">🟢 龍潭客服</option>
-            <option value="longtan_wh">🟡 龍潭倉管</option>
-            <option value="admin">🟣 管理員</option>
-          </select>
-        </div>
-        <div class="form-group" style="flex:0">
-          <label>&nbsp;</label>
-          <button type="submit" class="btn btn-accent">➕ 新增員工</button>
-        </div>
-      </form>
+      <h3 class="section-title">👥 員工清單（唯讀）</h3>
+      <div style="background:#FEF3C7;border-left:4px solid var(--warning);padding:12px 16px;border-radius:6px;margin-bottom:16px;font-size:14px;line-height:1.7">
+        <strong>🔒 為什麼這裡不能直接新增/停用？</strong><br>
+        本系統不需密碼即可使用，若把員工管理開放給網頁，<strong>任何取得網址的人都能透過瀏覽器 console 增刪員工或把自己改成管理員</strong>，這不是真實的權限控制。<br>
+        員工管理請改至 <strong>Supabase Dashboard → Table Editor → users 表</strong> 操作，那邊用的是 service_role 金鑰才有寫入權，較安全。
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;color:var(--primary)">▶ 點此看具體步驟</summary>
+          <ol style="margin:8px 0 0 20px;padding:0">
+            <li>進入 <a href="https://supabase.com/dashboard" target="_blank" style="color:var(--primary)">supabase.com/dashboard</a> 登入</li>
+            <li>選 <code>huizhou-tasks</code> 專案</li>
+            <li>左側 <strong>Table Editor</strong> → 點 <code>users</code> 表</li>
+            <li>新增員工：右上 <strong>Insert</strong> → <strong>Insert row</strong>，填 name 與 location（zhongli_cs / longtan_cs / longtan_wh / admin），active 預設 true</li>
+            <li>停用員工：點該列任一格 → 把 <code>active</code> 改成 false（保留歷史紀錄）</li>
+            <li>改名：直接點 <code>name</code> 欄改</li>
+          </ol>
+        </details>
+      </div>
       <table class="user-table">
         <thead>
           <tr>
@@ -146,7 +143,6 @@
             <th>部門</th>
             <th>狀態</th>
             <th>建立日</th>
-            <th class="text-right">操作</th>
           </tr>
         </thead>
         <tbody id="userTbody"></tbody>
@@ -298,7 +294,6 @@ let allUsers = [];
 
     // forms
     document.getElementById('newTaskForm').addEventListener('submit', handleNewTask);
-    document.getElementById('newUserForm').addEventListener('submit', handleNewUser);
     document.getElementById('filterBtn').addEventListener('click', loadHistory);
 
     await refreshAll();
@@ -457,6 +452,7 @@ function bindCardEvents(container) {
 }
 
 // ============ 代開工單 ============
+// 流程：先產生 UUID → 上傳照片 → 全部成功才 INSERT 工單
 async function handleNewTask(e) {
   e.preventDefault();
   const form = e.target;
@@ -469,8 +465,19 @@ async function handleNewTask(e) {
   submitBtn.disabled = true;
   submitBtn.textContent = '📤 處理中...';
 
+  const taskId = crypto.randomUUID();
+  const files = document.getElementById('photoInput').files;
+  let photoUrls = [];
+
   try {
-    const { data: inserted, error } = await supabase.from('tasks').insert({
+    if (files.length > 0) {
+      submitBtn.textContent = `📤 上傳照片中... (0/${files.length})`;
+      photoUrls = await uploadPhotos(files, taskId);
+    }
+
+    submitBtn.textContent = '📤 建立工單中...';
+    const { error } = await supabase.from('tasks').insert({
+      id: taskId,
       source: fd.get('source'),
       created_by_user_id: currentUser.id,
       created_by_name: currentUser.name + '(管理員代開)',
@@ -480,30 +487,18 @@ async function handleNewTask(e) {
       title,
       description: (fd.get('description') || '').toString().trim() || null,
       priority: fd.get('urgent') ? 'urgent' : 'normal',
-      photos: []
-    }).select().single();
+      photos: photoUrls
+    });
 
     if (error) throw error;
-
-    const files = document.getElementById('photoInput').files;
-    if (files.length > 0) {
-      submitBtn.textContent = '📤 上傳照片中...';
-      try {
-        const urls = await uploadPhotos(files, inserted.id);
-        await supabase.from('tasks').update({ photos: urls }).eq('id', inserted.id);
-      } catch (upErr) {
-        alert(upErr.message);
-      }
-    }
 
     form.reset();
     document.getElementById('photoInput').value = '';
     await refreshAll();
     showToast({ type: 'success', title: '✅ 工單已送出', message: title });
-    // 切回 all tab
     document.querySelector('.tab[data-tab="all"]').click();
   } catch (err) {
-    alert('送出失敗：' + err.message);
+    alert('送出失敗：' + err.message + '\n\n工單尚未建立，請重新送出。');
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = '📤 送出工單';
@@ -619,7 +614,7 @@ async function loadUsers() {
 function renderUsers() {
   const tbody = document.getElementById('userTbody');
   if (allUsers.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">沒有員工</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">沒有員工</td></tr>';
     return;
   }
   tbody.innerHTML = allUsers.map(u => `
@@ -628,62 +623,8 @@ function renderUsers() {
       <td><span class="badge ${LOCATION_BADGE_CLASS[u.location]}">${LOCATION_ICON[u.location]} ${LOCATION_LABEL[u.location]}</span></td>
       <td>${u.active ? '<span class="text-success">✅ 在職</span>' : '<span class="text-muted">⛔ 停用</span>'}</td>
       <td>${formatDateTime(u.created_at).split(' ')[0]}</td>
-      <td class="text-right">
-        <button class="btn btn-ghost btn-sm rename-btn" data-id="${u.id}">✏️ 改名</button>
-        ${u.active
-          ? `<button class="btn btn-danger btn-sm toggle-btn" data-id="${u.id}" data-action="deactivate">⛔ 停用</button>`
-          : `<button class="btn btn-success btn-sm toggle-btn" data-id="${u.id}" data-action="activate">✅ 啟用</button>`}
-      </td>
     </tr>
   `).join('');
-
-  tbody.querySelectorAll('.rename-btn').forEach(btn => {
-    btn.addEventListener('click', () => renameUser(btn.getAttribute('data-id')));
-  });
-  tbody.querySelectorAll('.toggle-btn').forEach(btn => {
-    btn.addEventListener('click', () => toggleUser(btn.getAttribute('data-id'), btn.getAttribute('data-action')));
-  });
-}
-
-async function handleNewUser(e) {
-  e.preventDefault();
-  const form = e.target;
-  const name = form.elements.name.value.trim();
-  const location = form.elements.location.value;
-  if (!name) return;
-
-  const { error } = await supabase.from('users').insert({ name, location, active: true });
-  if (error) {
-    if (error.code === '23505') alert('已有同部門的相同姓名員工。');
-    else alert('新增失敗：' + error.message);
-    return;
-  }
-  form.reset();
-  await loadUsers();
-  showToast({ type: 'success', title: '✅ 已新增員工', message: `${name}（${LOCATION_LABEL[location]}）` });
-}
-
-async function renameUser(id) {
-  const u = allUsers.find(x => x.id === id);
-  if (!u) return;
-  const newName = prompt(`請輸入「${u.name}」的新姓名：`, u.name);
-  if (!newName || newName.trim() === '' || newName.trim() === u.name) return;
-  const { error } = await supabase.from('users').update({ name: newName.trim() }).eq('id', id);
-  if (error) { alert('改名失敗：' + error.message); return; }
-  await loadUsers();
-  showToast({ type: 'info', title: '✏️ 已改名', message: `${u.name} → ${newName.trim()}` });
-}
-
-async function toggleUser(id, action) {
-  const u = allUsers.find(x => x.id === id);
-  if (!u) return;
-  const active = action === 'activate';
-  const verb = active ? '啟用' : '停用';
-  if (!confirm(`確定要${verb}「${u.name}」嗎？\n${active ? '' : '停用後該員工將無法登入系統（但歷史紀錄保留）。'}`)) return;
-  const { error } = await supabase.from('users').update({ active }).eq('id', id);
-  if (error) { alert(verb + '失敗：' + error.message); return; }
-  await loadUsers();
-  showToast({ type: 'info', title: '✅ 已' + verb, message: u.name });
 }
 
 // ============ 通知（admin 雙向）============
@@ -817,12 +758,6 @@ function subscribeRealtime() {
         });
       }
       await refreshAll();
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, async () => {
-      // 員工資料變動時，若目前在人員管理頁，自動 refresh
-      if (document.querySelector('.tab-panel.active').getAttribute('data-panel') === 'users') {
-        await loadUsers();
-      }
     })
     .subscribe();
 }

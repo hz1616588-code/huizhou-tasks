@@ -260,30 +260,48 @@ async function markRead(taskId, eventType) {
   if (error) console.warn('標已讀失敗:', error);
 }
 
-async function markAllRead(eventTypes) {
+async function markAllRead(eventTypes, opts = {}) {
   if (!currentUser) return;
-  // 撈出 7 天內可能未讀的 task
-  let q = supabase.from('tasks').select('id, status, created_at, completed_at, cancelled_at')
-    .gte('created_at', new Date(Date.now() - 7 * 86400000).toISOString());
-  const { data: tasks } = await q;
-  if (!tasks) return;
-
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
   const rows = [];
-  for (const t of tasks) {
-    if (eventTypes.includes('new')) {
-      rows.push({ user_id: currentUser.id, task_id: t.id, event_type: 'new' });
+
+  // 對每個 event_type 分別用對應的時間欄位查
+  // - 'new': 用 created_at（任何狀態的工單）
+  // - 'completed': 用 completed_at（只看 status='done'）
+  // - 'cancelled': 用 cancelled_at（只看 status='cancelled'）
+  for (const evt of eventTypes) {
+    let q = supabase.from('tasks').select('id, created_by_user_id, status');
+    if (evt === 'new') {
+      q = q.gte('created_at', sevenDaysAgo);
+    } else if (evt === 'completed') {
+      q = q.eq('status', 'done').gte('completed_at', sevenDaysAgo);
+    } else if (evt === 'cancelled') {
+      q = q.eq('status', 'cancelled').gte('cancelled_at', sevenDaysAgo);
+      // 客服端只在乎自己開的單被作廢 — 由呼叫端透過 opts.onlyOwnCancelled 指定
+      if (opts.onlyOwnCancelled) q = q.eq('created_by_user_id', currentUser.id);
+    } else {
+      continue;
     }
-    if (eventTypes.includes('completed') && t.status === 'done') {
-      rows.push({ user_id: currentUser.id, task_id: t.id, event_type: 'completed' });
+    const { data, error } = await q;
+    if (error) {
+      console.warn('markAllRead 查詢失敗:', error);
+      continue;
     }
-    if (eventTypes.includes('cancelled') && t.status === 'cancelled') {
-      rows.push({ user_id: currentUser.id, task_id: t.id, event_type: 'cancelled' });
+    if (data) {
+      data.forEach(t => rows.push({
+        user_id: currentUser.id,
+        task_id: t.id,
+        event_type: evt
+      }));
     }
   }
+
   if (rows.length === 0) return;
-  await supabase.from('notification_reads').upsert(rows, {
+  // upsert 需要 notification_reads 的 UPDATE policy（已在 setup.sql 加入）
+  const { error } = await supabase.from('notification_reads').upsert(rows, {
     onConflict: 'user_id,task_id,event_type'
   });
+  if (error) console.warn('markAllRead upsert 失敗:', error);
 }
 
 // ===== 照片上傳 =====

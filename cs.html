@@ -165,7 +165,8 @@ let notifications = [];
     // 2. 設定鈴鐺
     setupNotifPanelToggle(document.getElementById('bellBtn'), document.getElementById('notifPanel'));
     document.getElementById('markAllReadBtn').addEventListener('click', async () => {
-      await markAllRead(['completed', 'cancelled']);
+      // 客服只在乎自己開的單被作廢，故 cancelled 只標記自己開的
+      await markAllRead(['completed', 'cancelled'], { onlyOwnCancelled: true });
       await refreshNotifications();
     });
 
@@ -323,6 +324,8 @@ function bindCardEvents(container) {
 }
 
 // ============ 新增工單 ============
+// 流程：先產生 UUID → 上傳照片 → 全部成功才 INSERT 工單
+// 這樣若照片失敗，根本不會建立工單，倉管不會收到沒照片的殘缺工單
 async function handleSubmitTask(e) {
   e.preventDefault();
   const form = e.target;
@@ -338,9 +341,22 @@ async function handleSubmitTask(e) {
   submitBtn.disabled = true;
   submitBtn.textContent = '📤 處理中...';
 
+  // 預先產生 task id（讓照片路徑能跟工單對應）
+  const taskId = crypto.randomUUID();
+  const files = document.getElementById('photoInput').files;
+  let photoUrls = [];
+
   try {
-    // 1. 先 INSERT 取得 task id
-    const { data: inserted, error } = await supabase.from('tasks').insert({
+    // 1. 先上傳照片（若有的話）— 失敗就 throw，不會建工單
+    if (files.length > 0) {
+      submitBtn.textContent = `📤 上傳照片中... (0/${files.length})`;
+      photoUrls = await uploadPhotos(files, taskId);
+    }
+
+    // 2. 照片全部成功後才 INSERT 工單
+    submitBtn.textContent = '📤 建立工單中...';
+    const { error } = await supabase.from('tasks').insert({
+      id: taskId,
       source: currentUser.location,
       created_by_user_id: currentUser.id,
       created_by_name: currentUser.name,
@@ -350,22 +366,10 @@ async function handleSubmitTask(e) {
       title,
       description: (fd.get('description') || '').toString().trim() || null,
       priority: fd.get('urgent') ? 'urgent' : 'normal',
-      photos: []
-    }).select().single();
+      photos: photoUrls
+    });
 
     if (error) throw error;
-
-    // 2. 上傳照片
-    const files = document.getElementById('photoInput').files;
-    if (files.length > 0) {
-      submitBtn.textContent = '📤 上傳照片中...';
-      try {
-        const urls = await uploadPhotos(files, inserted.id);
-        await supabase.from('tasks').update({ photos: urls }).eq('id', inserted.id);
-      } catch (upErr) {
-        alert(upErr.message + '\n\n工單已建立但照片未上傳，請手動補上或重新建立。');
-      }
-    }
 
     form.reset();
     document.getElementById('photoInput').value = '';
@@ -377,7 +381,7 @@ async function handleSubmitTask(e) {
       meta: '倉管會收到通知'
     });
   } catch (err) {
-    alert('送出失敗：' + err.message);
+    alert('送出失敗：' + err.message + '\n\n工單尚未建立，請重新送出。');
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = '📤 送出工單';
@@ -423,7 +427,7 @@ async function refreshNotifications() {
 
   const { data, error } = await supabase
     .from('tasks')
-    .select('id, title, status, source, created_by_name, completed_at, completed_by_name, completion_note, cancelled_at, cancelled_by_name')
+    .select('id, title, status, source, created_by_user_id, created_by_name, completed_at, completed_by_name, completion_note, cancelled_at, cancelled_by_name')
     .in('status', ['done', 'cancelled'])
     .or(`completed_at.gte.${sevenDaysAgo},cancelled_at.gte.${sevenDaysAgo}`)
     .order('completed_at', { ascending: false, nullsFirst: false });
@@ -433,8 +437,14 @@ async function refreshNotifications() {
     return;
   }
 
-  // 撈該使用者已讀紀錄
-  const taskIds = (data || []).map(t => t.id);
+  // 客服只關心：所有完成 + 自己開的單被作廢
+  const filtered = (data || []).filter(t => {
+    if (t.status === 'done') return true;
+    if (t.status === 'cancelled') return t.created_by_user_id === currentUser.id;
+    return false;
+  });
+
+  const taskIds = filtered.map(t => t.id);
   let readSet = new Set();
   if (taskIds.length > 0) {
     const { data: reads } = await supabase
@@ -445,7 +455,7 @@ async function refreshNotifications() {
     if (reads) readSet = new Set(reads.map(r => `${r.task_id}_${r.event_type}`));
   }
 
-  notifications = (data || []).map(t => {
+  notifications = filtered.map(t => {
     const eventType = t.status === 'done' ? 'completed' : 'cancelled';
     return {
       ...t,
@@ -523,15 +533,20 @@ function subscribeRealtime() {
         blinkTitle('🔔');
         desktopNotify('✅ 工單已完成', `${t.title}（${t.completed_by_name}）`);
       }
-      // status 變成 cancelled → 收到作廢通知（如果是 admin 作廢）
-      if (t.status === 'cancelled' && old.status !== 'cancelled' && t.cancelled_by_user_id !== currentUser.id) {
+      // status 變成 cancelled → 只通知「自己開的單被別人作廢」（通常是 admin 作廢）
+      // 自己作廢自己 / 別人開的單被作廢 都不通知
+      if (t.status === 'cancelled' && old.status !== 'cancelled'
+          && t.cancelled_by_user_id !== currentUser.id
+          && t.created_by_user_id === currentUser.id) {
         showToast({
           type: 'normal',
-          title: '🚫 工單已作廢',
+          title: '🚫 你的工單已被作廢',
           message: t.title,
-          meta: `作廢者：${t.cancelled_by_name}`,
+          meta: `作廢者：${t.cancelled_by_name}${t.cancellation_reason ? '｜原因：' + t.cancellation_reason : ''}`,
           taskId: t.id
         });
+        playAlert(false);
+        blinkTitle('🚫');
       }
 
       await refreshAll();
