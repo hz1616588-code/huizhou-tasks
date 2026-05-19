@@ -1,43 +1,42 @@
-﻿@echo off
-chcp 65001 >nul
-title 匯洲工單系統 - 一鍵安裝
+@echo off
+title Huizhou Tasks - Install
 cls
 
-echo ============================================
-echo   匯洲工單系統 - 一鍵安裝設定
-echo ============================================
+echo ==========================================
+echo   Huizhou Tasks System - Install
+echo ==========================================
 echo.
-echo 請選擇您的身份：
+echo Select your role / Xuan ze shen fen:
 echo.
-echo   [1] 中壢 / 龍潭 客服
-echo   [2] 龍潭 倉管
-echo   [3] 管理員（小瀾）
+echo   [1] CS / Ke fu  (Zhongli or Longtan)
+echo   [2] Warehouse / Cang guan  (Longtan)
+echo   [3] Admin / Guan li yuan  (Xiao Lan)
 echo.
-set /p choice="請輸入 1/2/3 後按 Enter："
+
+set /p choice="Enter 1/2/3 and press Enter: "
 
 set "URL="
 set "ROLE="
 if "%choice%"=="1" (
   set "URL=https://hz1616588-code.github.io/huizhou-tasks/cs.html"
-  set "ROLE=客服"
+  set "ROLE=CS"
 )
 if "%choice%"=="2" (
   set "URL=https://hz1616588-code.github.io/huizhou-tasks/warehouse.html"
-  set "ROLE=倉管"
+  set "ROLE=Warehouse"
 )
 if "%choice%"=="3" (
   set "URL=https://hz1616588-code.github.io/huizhou-tasks/admin.html"
-  set "ROLE=管理員"
+  set "ROLE=Admin"
 )
 
 if not defined URL (
   echo.
-  echo [錯誤] 輸入無效，請重新執行此程式
+  echo [ERROR] Invalid input. Run again and enter 1, 2, or 3.
   pause
   exit /b 1
 )
 
-REM 尋找 Chrome 或 Edge
 set "BROWSER="
 if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
   set "BROWSER=C:\Program Files\Google\Chrome\Application\chrome.exe"
@@ -53,62 +52,52 @@ if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
 
 if not defined BROWSER (
   echo.
-  echo [錯誤] 找不到 Chrome 或 Edge 瀏覽器
-  echo 請先到 https://www.google.com/chrome 下載安裝 Chrome
-  echo 安裝後再執行此程式
+  echo [ERROR] Chrome or Edge not found.
+  echo Install Chrome from https://www.google.com/chrome
   pause
   exit /b 1
 )
 
-set "SHORTCUT_NAME=匯洲工單"
+set "SHORTCUT_NAME=HuizhouTasks"
 set "DESKTOP=%USERPROFILE%\Desktop"
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 
 echo.
-echo [偵測] 瀏覽器：%BROWSER%
-echo [身份] %ROLE%
-echo [網址] %URL%
+echo [Browser] %BROWSER%
+echo [Role]    %ROLE%
+echo [URL]     %URL%
 echo.
-echo [建立] 桌面捷徑...
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%DESKTOP%\%SHORTCUT_NAME%.lnk'); $sc.TargetPath = '%BROWSER%'; $sc.Arguments = '--app=%URL%'; $sc.WorkingDirectory = '%USERPROFILE%'; $sc.WindowStyle = 1; $sc.IconLocation = '%BROWSER%,0'; $sc.Description = '匯洲工單系統 - %ROLE%'; $sc.Save()"
+
+echo Creating desktop shortcut...
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%DESKTOP%\%SHORTCUT_NAME%.lnk'); $sc.TargetPath = '%BROWSER%'; $sc.Arguments = '--app=%URL%'; $sc.WorkingDirectory = '%USERPROFILE%'; $sc.WindowStyle = 1; $sc.IconLocation = '%BROWSER%,0'; $sc.Description = 'Huizhou Tasks - %ROLE%'; $sc.Save()"
 
 if not exist "%DESKTOP%\%SHORTCUT_NAME%.lnk" (
-  echo [錯誤] 捷徑建立失敗，請聯絡 IT 或重試
+  echo [ERROR] Failed to create shortcut.
   pause
   exit /b 1
 )
 
-echo [建立] 開機自啟動...
+echo Adding to Windows Startup...
 copy /Y "%DESKTOP%\%SHORTCUT_NAME%.lnk" "%STARTUP%\%SHORTCUT_NAME%.lnk" >nul
 
 echo.
-echo ============================================
-echo   ✓ 安裝完成
-echo ============================================
+echo ==========================================
+echo   Installation Complete!
+echo ==========================================
 echo.
-echo  桌面捷徑：%DESKTOP%\%SHORTCUT_NAME%.lnk
-echo  開機自啟：%STARTUP%\%SHORTCUT_NAME%.lnk
+echo Created shortcuts:
+echo   Desktop:  %DESKTOP%\%SHORTCUT_NAME%.lnk
+echo   Autorun:  %STARTUP%\%SHORTCUT_NAME%.lnk
 echo.
-echo  下一步：
-echo   1. 雙擊桌面的「%SHORTCUT_NAME%」即可開啟
-echo   2. 第一次開啟時，從清單中選擇您的姓名
-echo   3. 跳出「允許桌面通知」請點【允許】
-echo   4. 下次開機會自動跳出（不必再執行此程式）
+echo Next steps:
+echo   1. Double-click "HuizhouTasks" on desktop
+echo   2. Select your name from the dropdown
+echo   3. Click "Allow" when asked about notifications
+echo   4. System will auto-start next time you boot the PC
 echo.
-echo  如要解除安裝：刪除桌面與啟動資料夾兩個捷徑即可
-echo  啟動資料夾位置：%STARTUP%
+echo Tip: You can rename the desktop icon to Chinese
+echo      by right-clicking it and choosing Rename.
 echo.
-echo ============================================
-echo   進階：永遠浮在最上層（倉管推薦）
-echo ============================================
-echo.
-echo  1. 開啟 Microsoft Store
-echo  2. 搜尋並安裝「PowerToys」（免費，Microsoft 官方）
-echo  3. 啟動 PowerToys → 左側選「Always On Top」並開啟
-echo  4. 打開工單視窗，按 Win+Ctrl+T 即可
-echo     再按一次可解除
-echo.
-echo  完成後，無論開啟 Excel、PDF、LINE，
-echo  工單視窗都會浮在最上面，新工單來不會錯過
+echo To uninstall: delete the two shortcut files above.
 echo.
 pause
