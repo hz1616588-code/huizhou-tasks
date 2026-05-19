@@ -72,10 +72,11 @@
       <form id="newTaskForm">
         <div class="form-grid">
           <div class="form-group">
-            <label>代誰開單（部門） <span class="required">*</span></label>
+            <label>開單身份 <span class="required">*</span></label>
             <select class="form-control" name="source" required>
-              <option value="zhongli_cs">🔵 中壢客服</option>
-              <option value="longtan_cs">🟢 龍潭客服</option>
+              <option value="admin">🟣 管理員（我自己）</option>
+              <option value="zhongli_cs">🔵 代中壢客服開</option>
+              <option value="longtan_cs">🟢 代龍潭客服開</option>
             </select>
           </div>
           <div class="form-group">
@@ -180,8 +181,9 @@
           <label>來源</label>
           <select id="filterSource" class="form-control">
             <option value="">全部</option>
-            <option value="zhongli_cs">中壢</option>
-            <option value="longtan_cs">龍潭</option>
+            <option value="zhongli_cs">中壢客服</option>
+            <option value="longtan_cs">龍潭客服</option>
+            <option value="admin">管理員</option>
           </select>
         </div>
         <div class="form-group">
@@ -484,11 +486,15 @@ async function handleNewTask(e) {
     }
 
     submitBtn.textContent = '📤 建立工單中...';
+    const sourceVal = fd.get('source');
+    const nameVal = sourceVal === 'admin'
+      ? currentUser.name
+      : currentUser.name + '(管理員代開)';
     const { error } = await supabase.from('tasks').insert({
       id: taskId,
-      source: fd.get('source'),
+      source: sourceVal,
       created_by_user_id: currentUser.id,
-      created_by_name: currentUser.name + '(管理員代開)',
+      created_by_name: nameVal,
       category: fd.get('category'),
       customer_name: (fd.get('customer_name') || '').toString().trim() || null,
       order_no: (fd.get('order_no') || '').toString().trim() || null,
