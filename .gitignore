@@ -1,0 +1,17 @@
+# 敏感資訊，絕對不要 commit
+密碼.txt
+*.secret.txt
+*.password.txt
+service-role*
+secrets/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+*~

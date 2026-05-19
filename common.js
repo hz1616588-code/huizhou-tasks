@@ -279,6 +279,19 @@ async function markAllRead(eventTypes, opts = {}) {
       q = q.eq('status', 'cancelled').gte('cancelled_at', sevenDaysAgo);
       // 客服端只在乎自己開的單被作廢 — 由呼叫端透過 opts.onlyOwnCancelled 指定
       if (opts.onlyOwnCancelled) q = q.eq('created_by_user_id', currentUser.id);
+    } else if (evt === 'comment') {
+      // 撈出最近 7 天內有留言的工單，標記為「已讀到現在」
+      const { data: recent } = await supabase
+        .from('task_comments')
+        .select('task_id')
+        .gte('created_at', sevenDaysAgo);
+      const uniqueTaskIds = [...new Set((recent || []).map(c => c.task_id))];
+      uniqueTaskIds.forEach(tid => rows.push({
+        user_id: currentUser.id,
+        task_id: tid,
+        event_type: 'comment'
+      }));
+      continue;
     } else {
       continue;
     }
@@ -407,6 +420,243 @@ function setupNotifPanelToggle(bellBtn, panel) {
       panel.classList.remove('open');
     }
   });
+}
+
+// ===== 工單對話（task_comments）=====
+// 渲染對話區塊（包含 toggle、訊息列表、輸入區）
+function renderCommentsSection(task, commentCount = 0) {
+  const locked = task.status === 'cancelled';
+  return `
+    <div class="comments-section" data-task-id="${task.id}">
+      <button type="button" class="comments-toggle">
+        💬 對話 <span class="comments-count">${commentCount}</span>
+      </button>
+      <div class="comments-body">
+        <div class="comment-list">
+          <div class="text-muted text-center" style="font-size:12px;padding:8px">載入中...</div>
+        </div>
+        ${locked ? `
+          <div class="comments-locked">🚫 此工單已作廢，無法繼續留言</div>
+        ` : `
+          <div class="comment-input-row">
+            <textarea class="comment-input" placeholder="輸入訊息（Enter 送出，Shift+Enter 換行）" rows="1"></textarea>
+            <input type="file" class="comment-photos-input" multiple accept="image/*" hidden>
+            <label class="file-label" title="附加照片">📎<span class="file-count"></span></label>
+            <button type="button" class="btn btn-accent btn-sm comment-send-btn">送出</button>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+// 取出某些工單的留言數量（一次查多筆）
+async function fetchCommentCounts(taskIds) {
+  if (!taskIds || taskIds.length === 0) return new Map();
+  const { data, error } = await supabase
+    .from('task_comments')
+    .select('task_id')
+    .in('task_id', taskIds);
+  const counts = new Map();
+  if (error) {
+    console.warn('fetchCommentCounts 失敗:', error);
+    return counts;
+  }
+  for (const row of data || []) {
+    counts.set(row.task_id, (counts.get(row.task_id) || 0) + 1);
+  }
+  return counts;
+}
+
+// 載入單一工單的留言列表
+async function loadCommentsForCard(cardEl) {
+  const taskId = cardEl.querySelector('.comments-section')?.getAttribute('data-task-id');
+  if (!taskId) return;
+  const listEl = cardEl.querySelector('.comment-list');
+  if (!listEl) return;
+
+  const { data, error } = await supabase
+    .from('task_comments')
+    .select('*')
+    .eq('task_id', taskId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    listEl.innerHTML = `<div class="text-muted text-center" style="padding:8px;color:var(--urgent)">載入失敗：${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  if (!data || data.length === 0) {
+    listEl.innerHTML = '';
+    return;
+  }
+  listEl.innerHTML = data.map(renderCommentBubble).join('');
+  listEl.querySelectorAll('img[data-url]').forEach(img => {
+    img.addEventListener('click', () => openLightbox(img.getAttribute('data-url')));
+  });
+  // 捲到底
+  listEl.scrollTop = listEl.scrollHeight;
+}
+
+function renderCommentBubble(c) {
+  const isSelf = currentUser && c.user_id === currentUser.id;
+  const photos = (c.photos || []).map(url =>
+    `<img src="${escapeHtml(url)}" data-url="${escapeHtml(url)}" alt="留言照片">`
+  ).join('');
+  const icon = LOCATION_ICON[c.user_location] || '👤';
+  const locLabel = LOCATION_LABEL[c.user_location] || '';
+  return `
+    <div class="comment-bubble bubble-${c.user_location} ${isSelf ? 'is-self' : ''}" data-comment-id="${c.id}">
+      <div class="comment-head">
+        <span class="comment-author">${icon} ${locLabel} ${escapeHtml(c.user_name)}</span>
+        <span>${relativeTime(c.created_at)}</span>
+      </div>
+      ${c.content ? `<div class="comment-content">${escapeHtml(c.content)}</div>` : ''}
+      ${photos ? `<div class="comment-photos">${photos}</div>` : ''}
+    </div>
+  `;
+}
+
+// 送出新留言
+async function sendComment(taskId, content, files) {
+  if (!currentUser) throw new Error('尚未取得身份');
+  content = (content || '').trim();
+  if (!content && (!files || files.length === 0)) {
+    throw new Error('請輸入文字或附加照片');
+  }
+  let photoUrls = [];
+  if (files && files.length > 0) {
+    // 用 task_id/comments 路徑，跟工單照片分開
+    photoUrls = await uploadPhotos(files, `${taskId}/comments`);
+  }
+  const { data, error } = await supabase.from('task_comments').insert({
+    task_id: taskId,
+    user_id: currentUser.id,
+    user_name: currentUser.name,
+    user_location: currentUser.location,
+    content: content || null,
+    photos: photoUrls
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// 綁定對話區的事件（toggle、送出、上傳照片、Enter 送出）
+function bindCommentsEvents(cardEl, opts = {}) {
+  const section = cardEl.querySelector('.comments-section');
+  if (!section) return;
+
+  const toggle = section.querySelector('.comments-toggle');
+  const body = section.querySelector('.comments-body');
+  const sendBtn = section.querySelector('.comment-send-btn');
+  const textarea = section.querySelector('.comment-input');
+  const photoInput = section.querySelector('.comment-photos-input');
+  const fileLabel = section.querySelector('.file-label');
+  const fileCount = section.querySelector('.file-count');
+
+  let loaded = false;
+
+  toggle?.addEventListener('click', async () => {
+    body.classList.toggle('open');
+    if (body.classList.contains('open')) {
+      if (!loaded) {
+        loaded = true;
+        await loadCommentsForCard(cardEl);
+      }
+      // 標記此 task 留言為已讀（清掉 has-unread 樣式 + 同步雲端 + 更新鈴鐺）
+      const taskId = section.getAttribute('data-task-id');
+      if (currentUser && taskId) {
+        toggle.classList.remove('has-unread');
+        await markRead(taskId, 'comment');
+        if (typeof window.refreshNotifications === 'function') {
+          window.refreshNotifications();
+        }
+      }
+    }
+  });
+
+  if (photoInput) {
+    photoInput.addEventListener('change', () => {
+      const n = photoInput.files.length;
+      fileCount.textContent = n > 0 ? ` ${n}` : '';
+    });
+    fileLabel?.addEventListener('click', (e) => {
+      e.preventDefault();
+      photoInput.click();
+    });
+  }
+
+  async function doSend() {
+    if (!sendBtn || sendBtn.disabled) return;
+    const content = textarea.value;
+    const files = photoInput.files;
+    sendBtn.disabled = true;
+    sendBtn.textContent = '送出中...';
+    try {
+      await sendComment(section.getAttribute('data-task-id'), content, files);
+      textarea.value = '';
+      photoInput.value = '';
+      fileCount.textContent = '';
+      // 不在這裡 append — 等 Realtime 推回來統一處理（避免重複）
+    } catch (err) {
+      alert('送出失敗：' + err.message);
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = '送出';
+    }
+  }
+
+  sendBtn?.addEventListener('click', doSend);
+
+  textarea?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      doSend();
+    }
+  });
+
+  // 自動展開（例如新留言來時頁面可以叫展開）
+  if (opts.autoOpen) {
+    toggle?.click();
+  }
+}
+
+// Realtime 收到新留言時：若該卡片的對話區已展開，append 到列表；無論如何，count +1
+function handleIncomingComment(comment, container = document) {
+  const card = container.querySelector(`[data-task-id="${comment.task_id}"]`);
+  if (!card) return;
+  const section = card.querySelector('.comments-section');
+  if (!section) return;
+
+  // dedupe — 若已存在不重複
+  if (section.querySelector(`[data-comment-id="${comment.id}"]`)) return;
+
+  const countEl = section.querySelector('.comments-count');
+  if (countEl) {
+    countEl.textContent = String((parseInt(countEl.textContent, 10) || 0) + 1);
+  }
+
+  const body = section.querySelector('.comments-body');
+  const listEl = section.querySelector('.comment-list');
+  const isSelf = currentUser && comment.user_id === currentUser.id;
+
+  // 自己送的訊息：append 並標已讀
+  // 其他人送的訊息：append + 若關閉中則 toggle 加 has-unread 樣式
+  if (listEl && body.classList.contains('open')) {
+    // 清空空狀態文字
+    if (listEl.children.length === 1 && listEl.firstElementChild?.classList?.contains('text-muted')) {
+      listEl.innerHTML = '';
+    }
+    listEl.insertAdjacentHTML('beforeend', renderCommentBubble(comment));
+    listEl.querySelectorAll('img[data-url]').forEach(img => {
+      if (!img._bound) {
+        img.addEventListener('click', () => openLightbox(img.getAttribute('data-url')));
+        img._bound = true;
+      }
+    });
+    listEl.scrollTop = listEl.scrollHeight;
+  } else if (!isSelf) {
+    section.querySelector('.comments-toggle')?.classList.add('has-unread');
+  }
 }
 
 // ===== 預設 onToastClick（頁面可覆寫）=====

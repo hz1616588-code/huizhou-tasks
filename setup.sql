@@ -96,17 +96,44 @@ CREATE TRIGGER tasks_set_updated_at
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ============================================
--- ③ 通知已讀狀態表（雲端同步）
+-- ③ 工單對話表（聊天串）
+-- ============================================
+-- 客服 ⇄ 倉管 ⇄ 管理員 可以針對單一工單來回對話，類似 LINE 群組
+-- 已作廢工單禁止留言（前端鎖死，不另加 trigger）
+-- 完成後仍可留言（例如完成後客服回「收到謝謝」）
+CREATE TABLE IF NOT EXISTS task_comments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id),
+  user_name TEXT NOT NULL,
+  user_location TEXT NOT NULL CHECK (user_location IN ('zhongli_cs','longtan_cs','longtan_wh','admin')),
+  content TEXT,
+  photos TEXT[] DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_comments_recent ON task_comments(created_at DESC);
+
+ALTER TABLE task_comments REPLICA IDENTITY FULL;
+
+-- ============================================
+-- ④ 通知已讀狀態表（雲端同步）
 -- ============================================
 CREATE TABLE IF NOT EXISTS notification_reads (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL CHECK (event_type IN ('new','completed','cancelled')),
+  event_type TEXT NOT NULL CHECK (event_type IN ('new','completed','cancelled','comment')),
   read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, task_id, event_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_notif_reads_user ON notification_reads(user_id, event_type);
+
+-- Migration: 若 notification_reads 已存在（舊版未含 'comment'），更新 CHECK 約束
+ALTER TABLE notification_reads DROP CONSTRAINT IF EXISTS notification_reads_event_type_check;
+ALTER TABLE notification_reads ADD CONSTRAINT notification_reads_event_type_check
+  CHECK (event_type IN ('new','completed','cancelled','comment'));
 
 -- ============================================
 -- ④ 啟用 Realtime（可重複執行）
@@ -115,7 +142,7 @@ DO $$
 DECLARE
   t TEXT;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['tasks', 'notification_reads'] LOOP
+  FOREACH t IN ARRAY ARRAY['tasks', 'notification_reads', 'task_comments'] LOOP
     IF NOT EXISTS (
       SELECT 1 FROM pg_publication_tables
       WHERE pubname = 'supabase_realtime' AND tablename = t
@@ -131,6 +158,7 @@ END $$;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_reads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE task_comments ENABLE ROW LEVEL SECURITY;
 
 -- ===== users：只開放讀取 =====
 -- ⚠️ 不開放 INSERT/UPDATE/DELETE 給 anon。員工管理請進 Supabase Table Editor。
@@ -164,6 +192,14 @@ CREATE POLICY "notif_update" ON notification_reads FOR UPDATE USING (true) WITH 
 
 DROP POLICY IF EXISTS "notif_delete" ON notification_reads;
 CREATE POLICY "notif_delete" ON notification_reads FOR DELETE USING (true);
+
+-- ===== task_comments：任何人可讀、可新增（前端會擋住已作廢工單）；不可改/刪 =====
+DROP POLICY IF EXISTS "comments_read" ON task_comments;
+CREATE POLICY "comments_read" ON task_comments FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "comments_insert" ON task_comments;
+CREATE POLICY "comments_insert" ON task_comments FOR INSERT WITH CHECK (true);
+-- 不開放 UPDATE/DELETE：留言不可改不可刪，保留完整對話軌跡
 
 -- ============================================
 -- ⑥ Storage Policy（照片上傳/讀取）

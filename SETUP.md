@@ -5,6 +5,19 @@
 
 ---
 
+## ⚠️ 若系統已上線後又升級了，請重跑 setup.sql
+
+setup.sql 是**可重複執行**的，新增功能後（例如加上對話功能）你只要：
+
+1. Supabase Dashboard → SQL Editor → New query
+2. 把最新的 `setup.sql` 整份貼進去 → Run
+3. 看到 Success 就完成升級
+4. 三邊員工分別在瀏覽器**強制重整**（Ctrl + Shift + R）載入新版前端
+
+**現有資料不會被清掉**，只會補上缺的表 / 欄位 / 索引。
+
+---
+
 ## 階段一：開 Supabase 雲端資料庫
 
 ### 1. 註冊 Supabase

@@ -273,7 +273,7 @@ let allUsers = [];
 
     setupNotifPanelToggle(document.getElementById('bellBtn'), document.getElementById('notifPanel'));
     document.getElementById('markAllReadBtn').addEventListener('click', async () => {
-      await markAllRead(['new', 'completed', 'cancelled']);
+      await markAllRead(['new', 'completed', 'cancelled', 'comment']);
       await refreshNotifications();
     });
 
@@ -328,6 +328,8 @@ async function refreshTaskList() {
     return;
   }
   allTasks = data || [];
+  const counts = await fetchCommentCounts(allTasks.map(t => t.id));
+  allTasks.forEach(t => { t._comment_count = counts.get(t.id) || 0; });
   renderPending();
   renderDoneToday();
   renderCancelledToday();
@@ -428,6 +430,7 @@ function renderAdminCard(t, withActions) {
       ${photos ? `<div class="task-photos">${photos}</div>` : ''}
       ${extraInfo}
       ${actions}
+      ${renderCommentsSection(t, t._comment_count || 0)}
     </div>
   `;
 }
@@ -449,6 +452,7 @@ function bindCardEvents(container) {
   container.querySelectorAll('.edit-btn').forEach(btn => {
     btn.addEventListener('click', () => openEditModal(btn.getAttribute('data-id')));
   });
+  container.querySelectorAll('.task-card').forEach(card => bindCommentsEvents(card));
 }
 
 // ============ 代開工單 ============
@@ -627,45 +631,78 @@ function renderUsers() {
   `).join('');
 }
 
-// ============ 通知（admin 雙向）============
-// admin 同時關心 new / completed / cancelled 三種事件，
-// 每種事件用各自的時間欄位判斷「是否最近 7 天內」，避免漏掉「10 天前建立但今天才完成」的工單
+// ============ 通知（admin 雙向 + 留言）============
 async function refreshNotifications() {
   const sevenDaysAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
   const sevenDaysAgoDate = new Date(sevenDaysAgoIso);
 
-  // 撈出最近 7 天內有任一事件（建立 / 完成 / 作廢）的工單
-  const { data, error } = await supabase
+  // 1. 工單事件（任一時間欄位在 7 天內）
+  const { data: tasksData } = await supabase
     .from('tasks')
     .select('*')
-    .or(`created_at.gte.${sevenDaysAgoIso},completed_at.gte.${sevenDaysAgoIso},cancelled_at.gte.${sevenDaysAgoIso}`)
-    .order('created_at', { ascending: false });
+    .or(`created_at.gte.${sevenDaysAgoIso},completed_at.gte.${sevenDaysAgoIso},cancelled_at.gte.${sevenDaysAgoIso}`);
 
-  if (error) { console.warn('載入通知失敗:', error); return; }
+  // 2. 留言事件（非自己留的，admin 可見所有對話，含已作廢工單上的歷史對話）
+  const { data: commentsData } = await supabase
+    .from('task_comments')
+    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status)')
+    .gte('created_at', sevenDaysAgoIso)
+    .neq('user_id', currentUser.id);
 
-  const taskIds = (data || []).map(t => t.id);
-  let readMap = new Map();
-  if (taskIds.length > 0) {
+  // 3. 撈已讀紀錄
+  const allTaskIds = [...new Set([
+    ...(tasksData || []).map(t => t.id),
+    ...(commentsData || []).map(c => c.task_id)
+  ])];
+  const readMap = new Map();
+  if (allTaskIds.length > 0) {
     const { data: reads } = await supabase
       .from('notification_reads')
-      .select('task_id, event_type')
+      .select('task_id, event_type, read_at')
       .eq('user_id', currentUser.id)
-      .in('task_id', taskIds);
-    if (reads) reads.forEach(r => readMap.set(`${r.task_id}_${r.event_type}`, true));
+      .in('task_id', allTaskIds);
+    if (reads) reads.forEach(r => readMap.set(`${r.task_id}_${r.event_type}`, r.read_at));
   }
 
-  // 把每張工單拆成 1~3 個事件，各自只在事件時間在 7 天內才列入
+  // 4. 組合
   const items = [];
-  for (const t of (data || [])) {
+  for (const t of (tasksData || [])) {
     if (t.created_at && new Date(t.created_at) >= sevenDaysAgoDate) {
-      items.push({ ...t, event_type: 'new', event_time: t.created_at, is_read: readMap.has(`${t.id}_new`) });
+      items.push({
+        task_id: t.id, title: t.title, source: t.source,
+        created_by_name: t.created_by_name, priority: t.priority,
+        event_type: 'new', event_time: t.created_at,
+        is_read: !!readMap.get(`${t.id}_new`)
+      });
     }
     if (t.status === 'done' && t.completed_at && new Date(t.completed_at) >= sevenDaysAgoDate) {
-      items.push({ ...t, event_type: 'completed', event_time: t.completed_at, is_read: readMap.has(`${t.id}_completed`) });
+      items.push({
+        task_id: t.id, title: t.title,
+        completed_by_name: t.completed_by_name,
+        event_type: 'completed', event_time: t.completed_at,
+        is_read: !!readMap.get(`${t.id}_completed`)
+      });
     }
     if (t.status === 'cancelled' && t.cancelled_at && new Date(t.cancelled_at) >= sevenDaysAgoDate) {
-      items.push({ ...t, event_type: 'cancelled', event_time: t.cancelled_at, is_read: readMap.has(`${t.id}_cancelled`) });
+      items.push({
+        task_id: t.id, title: t.title,
+        cancelled_by_name: t.cancelled_by_name,
+        event_type: 'cancelled', event_time: t.cancelled_at,
+        is_read: !!readMap.get(`${t.id}_cancelled`)
+      });
     }
+  }
+  for (const c of (commentsData || [])) {
+    const lastReadIso = readMap.get(`${c.task_id}_comment`);
+    const is_read = !!(lastReadIso && new Date(lastReadIso) >= new Date(c.created_at));
+    items.push({
+      task_id: c.task_id,
+      title: c.tasks ? c.tasks.title : '(已刪除工單)',
+      user_name: c.user_name, user_location: c.user_location,
+      content: c.content, photos: c.photos,
+      event_type: 'comment', event_time: c.created_at,
+      is_read
+    });
   }
   items.sort((a, b) => new Date(b.event_time) - new Date(a.event_time));
   notifications = items.slice(0, 80);
@@ -681,26 +718,29 @@ function renderNotifications() {
   badge.textContent = unread;
   badge.classList.toggle('hidden', unread === 0);
 
-  if (notifications.length === 0) {
-    list.innerHTML = '';
-    return;
-  }
+  if (notifications.length === 0) { list.innerHTML = ''; return; }
+
   list.innerHTML = notifications.map(n => {
-    const sourceLabel = LOCATION_ICON[n.source] + LOCATION_LABEL[n.source];
     let title, sub;
     if (n.event_type === 'new') {
+      const sourceLabel = LOCATION_ICON[n.source] + LOCATION_LABEL[n.source];
       const isUrgent = n.priority === 'urgent';
       title = `${isUrgent ? '🚨 急件' : '🔔'} ${escapeHtml(n.title)}`;
-      sub = `${sourceLabel} ${escapeHtml(n.created_by_name)} 開單 · ${relativeTime(n.created_at)}`;
+      sub = `${sourceLabel} ${escapeHtml(n.created_by_name)} 開單 · ${relativeTime(n.event_time)}`;
     } else if (n.event_type === 'completed') {
       title = `✅ ${escapeHtml(n.title)} 已完成`;
-      sub = `${escapeHtml(n.completed_by_name || '')} · ${relativeTime(n.completed_at)}`;
-    } else {
+      sub = `${escapeHtml(n.completed_by_name || '')} · ${relativeTime(n.event_time)}`;
+    } else if (n.event_type === 'cancelled') {
       title = `🚫 ${escapeHtml(n.title)} 已作廢`;
-      sub = `${escapeHtml(n.cancelled_by_name || '')} · ${relativeTime(n.cancelled_at)}`;
+      sub = `${escapeHtml(n.cancelled_by_name || '')} · ${relativeTime(n.event_time)}`;
+    } else if (n.event_type === 'comment') {
+      const icon = LOCATION_ICON[n.user_location] || '👤';
+      const summary = n.content || (n.photos && n.photos.length ? `📷 ${n.photos.length} 張照片` : '');
+      title = `💬 ${icon} ${escapeHtml(n.user_name)} 留言`;
+      sub = `${escapeHtml(summary).slice(0, 60)} · ${relativeTime(n.event_time)} · 工單：${escapeHtml(n.title)}`;
     }
     return `
-      <div class="notif-item ${n.is_read ? 'read' : ''}" data-id="${n.id}" data-event="${n.event_type}">
+      <div class="notif-item ${n.is_read ? 'read' : ''}" data-id="${n.task_id}" data-event="${n.event_type}">
         <span class="notif-dot"></span>
         <div class="notif-content">
           <div class="notif-title">${title}</div>
@@ -711,9 +751,23 @@ function renderNotifications() {
 
   list.querySelectorAll('.notif-item').forEach(el => {
     el.addEventListener('click', async () => {
-      await markRead(el.getAttribute('data-id'), el.getAttribute('data-event'));
+      const taskId = el.getAttribute('data-id');
+      const eventType = el.getAttribute('data-event');
+      await markRead(taskId, eventType);
       await refreshNotifications();
-      window.onToastClick(el.getAttribute('data-id'));
+      const card = document.querySelector(`[data-task-id="${taskId}"]`);
+      if (card) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        card.style.transition = 'background 0.3s';
+        card.style.background = 'rgba(201,169,97,0.2)';
+        setTimeout(() => { card.style.background = ''; }, 1500);
+        if (eventType === 'comment') {
+          const body = card.querySelector('.comments-body');
+          if (body && !body.classList.contains('open')) {
+            card.querySelector('.comments-toggle')?.click();
+          }
+        }
+      }
       document.getElementById('notifPanel').classList.remove('open');
     });
   });
@@ -764,6 +818,32 @@ function subscribeRealtime() {
         });
       }
       await refreshAll();
+    })
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'task_comments'
+    }, async (payload) => {
+      const c = payload.new;
+      handleIncomingComment(c);
+      if (c.user_id === currentUser.id) return;
+      let task = allTasks.find(t => t.id === c.task_id);
+      if (!task) {
+        const { data } = await supabase.from('tasks').select('*').eq('id', c.task_id).single();
+        task = data;
+      }
+      const icon = LOCATION_ICON[c.user_location] || '👤';
+      showToast({
+        type: 'info',
+        title: `💬 ${icon} ${c.user_name} 留言`,
+        message: c.content || (c.photos?.length ? `📷 ${c.photos.length} 張照片` : ''),
+        meta: `工單：${task ? task.title : '(已刪除)'}`,
+        taskId: c.task_id
+      });
+      playAlert(false);
+      blinkTitle('💬');
+      desktopNotify(`💬 ${c.user_name} 留言`, c.content || `工單：${task ? task.title : ''}`);
+      await refreshNotifications();
     })
     .subscribe();
 }
