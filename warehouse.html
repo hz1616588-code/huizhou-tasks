@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>匯洲工單 - 龍潭倉管</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-title">
+    <span class="logo-dot"></span>
+    匯洲工單 · 龍潭倉管
+  </div>
+  <div class="topbar-right">
+    <button id="bellBtn" class="bell-btn" title="通知">
+      🔔
+      <span id="bellBadge" class="bell-badge hidden">0</span>
+    </button>
+    <div id="userChip" class="user-chip"></div>
+  </div>
+</header>
+
+<div id="notifPanel" class="notif-panel">
+  <div class="notif-panel-head">
+    <span>通知 <span id="notifUnread">(0 未讀)</span></span>
+    <button id="markAllReadBtn" class="btn btn-ghost btn-sm" style="color:white;border-color:rgba(255,255,255,0.3)">全部標為已讀</button>
+  </div>
+  <div id="notifList" class="notif-list"></div>
+</div>
+
+<div class="container">
+
+  <!-- ① 待辦清單 -->
+  <section class="section">
+    <h3 class="section-title">📋 待辦清單 <span class="count" id="pendingCount">0</span></h3>
+    <div id="pendingList"></div>
+  </section>
+
+  <!-- ② 今日已完成（收合） -->
+  <section class="section collapsible collapsed" id="doneSection">
+    <h3 class="section-title">✅ 今日已完成 <span class="count" id="doneCount">0</span></h3>
+    <div class="section-body">
+      <div id="doneList"></div>
+    </div>
+  </section>
+
+</div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+let allTasks = [];
+let notifications = [];
+
+(async function init() {
+  try {
+    await getUserIdentity(['longtan_wh']);
+    renderUserChip(document.getElementById('userChip'));
+    requestDesktopPermission();
+
+    setupNotifPanelToggle(document.getElementById('bellBtn'), document.getElementById('notifPanel'));
+    document.getElementById('markAllReadBtn').addEventListener('click', async () => {
+      await markAllRead(['new']);
+      await refreshNotifications();
+    });
+
+    document.getElementById('doneSection').querySelector('.section-title').addEventListener('click', (e) => {
+      e.currentTarget.parentElement.classList.toggle('collapsed');
+    });
+
+    await refreshAll();
+    subscribeRealtime();
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshAll();
+    });
+
+  } catch (e) {
+    console.error('初始化失敗:', e);
+  }
+})();
+
+async function refreshAll() {
+  await Promise.all([refreshTaskList(), refreshNotifications()]);
+}
+
+async function refreshTaskList() {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .or(`status.eq.pending,and(status.eq.done,completed_at.gte.${todayStart.toISOString()})`)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('載入工單失敗:', error);
+    return;
+  }
+  allTasks = data || [];
+  renderPending();
+  renderDone();
+}
+
+function renderPending() {
+  const list = document.getElementById('pendingList');
+  const pending = allTasks.filter(t => t.status === 'pending')
+    .sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority === 'urgent' ? -1 : 1;
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+  document.getElementById('pendingCount').textContent = pending.length;
+  if (pending.length === 0) {
+    list.innerHTML = '<div class="empty">目前沒有待辦工單 🎉</div>';
+    return;
+  }
+  list.innerHTML = pending.map(renderTaskCardForWarehouse).join('');
+  bindCardEvents(list);
+}
+
+function renderDone() {
+  const list = document.getElementById('doneList');
+  const done = allTasks.filter(t => t.status === 'done' && isToday(t.completed_at))
+    .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
+  document.getElementById('doneCount').textContent = done.length;
+  if (done.length === 0) {
+    list.innerHTML = '<div class="empty">今天還沒完成任何工單</div>';
+    return;
+  }
+  list.innerHTML = done.map(renderTaskCardDone).join('');
+  bindCardEvents(list);
+}
+
+function renderTaskCardForWarehouse(t) {
+  const isUrgent = t.priority === 'urgent';
+  const sourceLabel = sourceBadgeHtml(t.source, t.created_by_name);
+  const photos = (t.photos || []).map(url => `<img src="${escapeHtml(url)}" alt="照片" data-url="${escapeHtml(url)}">`).join('');
+
+  return `
+    <div class="task-card ${isUrgent ? 'urgent' : ''}" data-task-id="${t.id}">
+      <div class="task-card-head">
+        ${isUrgent ? '<span class="badge badge-urgent">🔴 急件</span>' : ''}
+        ${categoryBadgeHtml(t.category)}
+        <div class="task-title">${escapeHtml(t.title)}</div>
+      </div>
+      <div class="task-meta">
+        ${sourceLabel}
+        <span>📅 ${formatDateTime(t.created_at)}</span>
+        ${t.customer_name ? `<span>👤 ${escapeHtml(t.customer_name)}</span>` : ''}
+        ${t.order_no ? `<span>📦 訂單 #${escapeHtml(t.order_no)}</span>` : ''}
+      </div>
+      ${t.description ? `<div class="task-body">${escapeHtml(t.description)}</div>` : ''}
+      ${photos ? `<div class="task-photos">${photos}</div>` : ''}
+      <div class="task-actions">
+        <input type="text" class="form-control note-input" placeholder="完成備註（可選，例：黑貓 123456789）" data-id="${t.id}">
+        <button class="btn btn-success complete-btn" data-id="${t.id}">✅ 完成</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderTaskCardDone(t) {
+  const sourceLabel = sourceBadgeHtml(t.source, t.created_by_name);
+  return `
+    <div class="task-card" data-task-id="${t.id}" style="opacity:0.85">
+      <div class="task-card-head">
+        <span class="badge badge-done">✅ 已完成</span>
+        ${categoryBadgeHtml(t.category)}
+        <div class="task-title">${escapeHtml(t.title)}</div>
+      </div>
+      <div class="task-meta">
+        ${sourceLabel}
+        <span>📅 ${formatDateTime(t.created_at)}</span>
+        <span>✅ 完成於 ${formatTime(t.completed_at)} (${escapeHtml(t.completed_by_name || '')})</span>
+        ${t.completion_note ? `<span>備註：${escapeHtml(t.completion_note)}</span>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function bindCardEvents(container) {
+  container.querySelectorAll('.task-photos img').forEach(img => {
+    img.addEventListener('click', () => openLightbox(img.getAttribute('data-url')));
+  });
+  container.querySelectorAll('.complete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      const noteInput = container.querySelector(`.note-input[data-id="${id}"]`);
+      completeTask(id, noteInput ? noteInput.value.trim() : '');
+    });
+  });
+}
+
+async function completeTask(taskId, note) {
+  const btn = document.querySelector(`.complete-btn[data-id="${taskId}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '處理中...'; }
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .update({
+      status: 'done',
+      completed_at: new Date().toISOString(),
+      completed_by_user_id: currentUser.id,
+      completed_by_name: currentUser.name,
+      completion_note: note || null
+    })
+    .eq('id', taskId)
+    .eq('status', 'pending')
+    .select();
+
+  if (error) {
+    alert('完成失敗：' + error.message);
+    if (btn) { btn.disabled = false; btn.textContent = '✅ 完成'; }
+    return;
+  }
+  if (!data || data.length === 0) {
+    // 衝突：可能被別人完成或被客服作廢
+    const { data: latest } = await supabase
+      .from('tasks').select('status, completed_by_name, cancelled_by_name').eq('id', taskId).single();
+    if (latest?.status === 'done') {
+      alert(`此工單已被「${latest.completed_by_name || '其他人'}」完成`);
+    } else if (latest?.status === 'cancelled') {
+      alert(`此工單已被「${latest.cancelled_by_name || '客服'}」作廢`);
+    } else {
+      alert('此工單狀態已變更，請重新整理');
+    }
+    await refreshAll();
+    return;
+  }
+
+  await refreshAll();
+  showToast({ type: 'success', title: '✅ 完成', message: data[0].title });
+}
+
+// ============ 通知 ============
+async function refreshNotifications() {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('id, title, priority, source, created_by_name, customer_name, order_no, created_at, status')
+    .gte('created_at', sevenDaysAgo)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.warn('載入通知失敗:', error);
+    return;
+  }
+
+  const taskIds = (data || []).map(t => t.id);
+  let readSet = new Set();
+  if (taskIds.length > 0) {
+    const { data: reads } = await supabase
+      .from('notification_reads')
+      .select('task_id, event_type')
+      .eq('user_id', currentUser.id)
+      .eq('event_type', 'new')
+      .in('task_id', taskIds);
+    if (reads) readSet = new Set(reads.map(r => r.task_id));
+  }
+
+  notifications = (data || []).map(t => ({
+    ...t,
+    is_read: readSet.has(t.id)
+  }));
+  renderNotifications();
+}
+
+function renderNotifications() {
+  const list = document.getElementById('notifList');
+  const unread = notifications.filter(n => !n.is_read).length;
+  document.getElementById('notifUnread').textContent = `(${unread} 未讀)`;
+  const badge = document.getElementById('bellBadge');
+  badge.textContent = unread;
+  badge.classList.toggle('hidden', unread === 0);
+
+  if (notifications.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = notifications.map(n => {
+    const sourceLabel = LOCATION_ICON[n.source] + LOCATION_LABEL[n.source];
+    const isUrgent = n.priority === 'urgent';
+    let statusTag = '';
+    if (n.status === 'done') statusTag = '<span class="badge badge-done" style="font-size:10px">已完成</span>';
+    if (n.status === 'cancelled') statusTag = '<span class="badge badge-cancelled" style="font-size:10px">已作廢</span>';
+    return `
+      <div class="notif-item ${n.is_read ? 'read' : ''}" data-id="${n.id}">
+        <span class="notif-dot" ${isUrgent && !n.is_read ? 'style="background:var(--urgent)"' : ''}></span>
+        <div class="notif-content">
+          <div class="notif-title">${isUrgent ? '🚨 急件' : '🔔'} ${escapeHtml(n.title)} ${statusTag}</div>
+          <div class="notif-sub">${sourceLabel} ${escapeHtml(n.created_by_name)} · ${relativeTime(n.created_at)}</div>
+        </div>
+      </div>`;
+  }).join('');
+  list.querySelectorAll('.notif-item').forEach(el => {
+    el.addEventListener('click', async () => {
+      await markRead(el.getAttribute('data-id'), 'new');
+      await refreshNotifications();
+      window.onToastClick(el.getAttribute('data-id'));
+      document.getElementById('notifPanel').classList.remove('open');
+    });
+  });
+}
+
+// ============ Realtime ============
+function subscribeRealtime() {
+  supabase.channel('wh-channel-' + currentUser.id)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'tasks'
+    }, async (payload) => {
+      const t = payload.new;
+      const isUrgent = t.priority === 'urgent';
+      const sourceLabel = LOCATION_ICON[t.source] + LOCATION_LABEL[t.source];
+      showToast({
+        type: isUrgent ? 'urgent' : 'normal',
+        title: isUrgent ? '🚨 急件！' : '🔔 新任務',
+        message: t.title,
+        meta: `來自 ${sourceLabel} ${t.created_by_name}${t.customer_name ? '｜' + t.customer_name : ''}${t.order_no ? '｜#' + t.order_no : ''}`,
+        taskId: t.id
+      });
+      playAlert(isUrgent);
+      blinkTitle(isUrgent ? '🚨' : '🔔');
+      desktopNotify(isUrgent ? '🚨 急件！' : '🔔 新任務', t.title);
+      await refreshAll();
+    })
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'tasks'
+    }, async () => {
+      await refreshAll();
+    })
+    .subscribe();
+}
+</script>
+
+</body>
+</html>

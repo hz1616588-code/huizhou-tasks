@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>匯洲工單 - 客服</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-title">
+    <span class="logo-dot"></span>
+    匯洲工單 · 客服
+  </div>
+  <div class="topbar-right">
+    <button id="bellBtn" class="bell-btn" title="通知">
+      🔔
+      <span id="bellBadge" class="bell-badge hidden">0</span>
+    </button>
+    <div id="userChip" class="user-chip"></div>
+  </div>
+</header>
+
+<div id="notifPanel" class="notif-panel">
+  <div class="notif-panel-head">
+    <span>通知 <span id="notifUnread">(0 未讀)</span></span>
+    <button id="markAllReadBtn" class="btn btn-ghost btn-sm" style="color:white;border-color:rgba(255,255,255,0.3)">全部標為已讀</button>
+  </div>
+  <div id="notifList" class="notif-list"></div>
+</div>
+
+<div class="container">
+
+  <!-- ① 新增工單 -->
+  <section class="section">
+    <h3 class="section-title">➕ 新增工單</h3>
+    <form id="newTaskForm">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>類別 <span class="required">*</span></label>
+          <select class="form-control" name="category" required>
+            <option value="shipment">出貨</option>
+            <option value="return">退換貨</option>
+            <option value="inquiry">查詢</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>急件</label>
+          <div class="checkbox-row">
+            <input type="checkbox" id="urgentChk" name="urgent">
+            <label for="urgentChk">🚨 標記為急件（倉管會優先處理）</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>客戶名</label>
+          <input class="form-control" name="customer_name" placeholder="例：王小姐">
+        </div>
+        <div class="form-group">
+          <label>訂單號</label>
+          <input class="form-control" name="order_no" placeholder="例：A12345">
+        </div>
+        <div class="form-group full">
+          <label>標題 <span class="required">*</span></label>
+          <input class="form-control" name="title" required placeholder="例：王小姐換貨">
+        </div>
+        <div class="form-group full">
+          <label>詳細說明</label>
+          <textarea class="form-control" name="description" rows="3" placeholder="例：客戶說鞋子尺寸不對，要換大半號"></textarea>
+        </div>
+        <div class="form-group full">
+          <label>照片（可選多張）</label>
+          <input type="file" class="form-control" name="photos" id="photoInput" multiple accept="image/*">
+        </div>
+        <div class="full text-right">
+          <button type="submit" id="submitBtn" class="btn btn-accent btn-lg">📤 送出工單</button>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <!-- ② 處理中 -->
+  <section class="section">
+    <h3 class="section-title">📋 處理中 <span class="count" id="pendingCount">0</span></h3>
+    <div id="pendingList"></div>
+  </section>
+
+  <!-- ③ 今日已完成 -->
+  <section class="section">
+    <h3 class="section-title">✅ 今日已完成 <span class="count" id="doneTodayCount">0</span></h3>
+    <div id="doneTodayList"></div>
+  </section>
+
+  <!-- ④ 歷史查詢（收合） -->
+  <section class="section collapsible collapsed" id="historySection">
+    <h3 class="section-title">📅 歷史查詢（最近 3 個月）</h3>
+    <div class="section-body">
+      <div class="filter-row">
+        <div class="form-group">
+          <label>起日</label>
+          <input type="date" id="filterFrom" class="form-control">
+        </div>
+        <div class="form-group">
+          <label>迄日</label>
+          <input type="date" id="filterTo" class="form-control">
+        </div>
+        <div class="form-group">
+          <label>類別</label>
+          <select id="filterCategory" class="form-control">
+            <option value="">全部</option>
+            <option value="shipment">出貨</option>
+            <option value="return">退換貨</option>
+            <option value="inquiry">查詢</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>來源</label>
+          <select id="filterSource" class="form-control">
+            <option value="">全部</option>
+            <option value="zhongli_cs">中壢</option>
+            <option value="longtan_cs">龍潭</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>狀態</label>
+          <select id="filterStatus" class="form-control">
+            <option value="">全部</option>
+            <option value="pending">處理中</option>
+            <option value="done">已完成</option>
+            <option value="cancelled">已作廢</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>客戶</label>
+          <input id="filterCustomer" class="form-control" placeholder="關鍵字">
+        </div>
+        <div class="form-group" style="flex:0">
+          <label>&nbsp;</label>
+          <button class="btn btn-primary" id="filterBtn">🔍 查詢</button>
+        </div>
+      </div>
+      <div id="historyList"></div>
+    </div>
+  </section>
+
+</div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+// ============ 初始化 ============
+let allTasks = [];
+let notifications = [];
+
+(async function init() {
+  try {
+    // 1. 取得身份
+    await getUserIdentity(['zhongli_cs', 'longtan_cs']);
+    renderUserChip(document.getElementById('userChip'));
+    requestDesktopPermission();
+
+    // 2. 設定鈴鐺
+    setupNotifPanelToggle(document.getElementById('bellBtn'), document.getElementById('notifPanel'));
+    document.getElementById('markAllReadBtn').addEventListener('click', async () => {
+      await markAllRead(['completed', 'cancelled']);
+      await refreshNotifications();
+    });
+
+    // 3. 設定表單
+    document.getElementById('newTaskForm').addEventListener('submit', handleSubmitTask);
+
+    // 4. 設定歷史查詢
+    document.getElementById('historySection').querySelector('.section-title').addEventListener('click', (e) => {
+      e.currentTarget.parentElement.classList.toggle('collapsed');
+    });
+    document.getElementById('filterBtn').addEventListener('click', loadHistory);
+
+    // 5. 載入資料
+    await refreshAll();
+
+    // 6. Realtime
+    subscribeRealtime();
+
+    // 7. visibilitychange re-sync
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshAll();
+    });
+
+  } catch (e) {
+    console.error('初始化失敗:', e);
+  }
+})();
+
+// ============ 載入資料 ============
+async function refreshAll() {
+  await Promise.all([refreshTaskList(), refreshNotifications()]);
+}
+
+async function refreshTaskList() {
+  // 處理中 + 今日已完成
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .or(`status.eq.pending,and(status.eq.done,completed_at.gte.${todayStart.toISOString()})`)
+    .order('priority', { ascending: false })  // urgent first
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('載入工單失敗:', error);
+    return;
+  }
+  allTasks = data || [];
+  renderPending();
+  renderDoneToday();
+}
+
+function renderPending() {
+  const list = document.getElementById('pendingList');
+  const pending = allTasks.filter(t => t.status === 'pending')
+    .sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority === 'urgent' ? -1 : 1;
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+  document.getElementById('pendingCount').textContent = pending.length;
+  if (pending.length === 0) {
+    list.innerHTML = '<div class="empty">目前沒有處理中的工單</div>';
+    return;
+  }
+  list.innerHTML = pending.map(renderTaskCard).join('');
+  bindCardEvents(list);
+}
+
+function renderDoneToday() {
+  const list = document.getElementById('doneTodayList');
+  const done = allTasks.filter(t => t.status === 'done' && isToday(t.completed_at))
+    .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
+  document.getElementById('doneTodayCount').textContent = done.length;
+  if (done.length === 0) {
+    list.innerHTML = '<div class="empty">今天還沒有完成的工單</div>';
+    return;
+  }
+  list.innerHTML = done.map(renderTaskCard).join('');
+  bindCardEvents(list);
+}
+
+function renderTaskCard(t) {
+  const isUrgent = t.priority === 'urgent';
+  const canCancel = t.status === 'pending' && t.created_by_user_id === currentUser.id;
+  const sourceLabel = sourceBadgeHtml(t.source, t.created_by_name);
+
+  let statusHtml = '';
+  if (t.status === 'done') {
+    statusHtml = `<span class="badge badge-done">✅ 已完成</span>`;
+  } else if (t.status === 'cancelled') {
+    statusHtml = `<span class="badge badge-cancelled">🚫 已作廢</span>`;
+  }
+
+  const photos = (t.photos || []).map(url => `<img src="${escapeHtml(url)}" alt="照片" data-url="${escapeHtml(url)}">`).join('');
+
+  let completedHtml = '';
+  if (t.status === 'done') {
+    completedHtml = `
+      <div class="task-meta" style="background:var(--success-bg);padding:8px;border-radius:6px">
+        <strong>✅ 倉管：${escapeHtml(t.completed_by_name || '')}</strong>
+        <span>${formatDateTime(t.completed_at)}</span>
+        ${t.completion_note ? `<span>備註：${escapeHtml(t.completion_note)}</span>` : ''}
+      </div>`;
+  }
+  let cancelledHtml = '';
+  if (t.status === 'cancelled') {
+    cancelledHtml = `
+      <div class="task-meta" style="background:#F3F4F6;padding:8px;border-radius:6px">
+        <strong>🚫 作廢者：${escapeHtml(t.cancelled_by_name || '')}</strong>
+        <span>${formatDateTime(t.cancelled_at)}</span>
+        ${t.cancellation_reason ? `<span>原因：${escapeHtml(t.cancellation_reason)}</span>` : ''}
+      </div>`;
+  }
+
+  return `
+    <div class="task-card ${isUrgent && t.status === 'pending' ? 'urgent' : ''} ${t.status === 'cancelled' ? 'cancelled' : ''}" data-task-id="${t.id}">
+      <div class="task-card-head">
+        ${isUrgent ? '<span class="badge badge-urgent">🔴 急件</span>' : ''}
+        ${categoryBadgeHtml(t.category)}
+        <div class="task-title">${escapeHtml(t.title)}</div>
+        ${statusHtml}
+      </div>
+      <div class="task-meta">
+        ${sourceLabel}
+        <span>📅 ${formatDateTime(t.created_at)}</span>
+        ${t.customer_name ? `<span>👤 ${escapeHtml(t.customer_name)}</span>` : ''}
+        ${t.order_no ? `<span>📦 訂單 #${escapeHtml(t.order_no)}</span>` : ''}
+      </div>
+      ${t.description ? `<div class="task-body">${escapeHtml(t.description)}</div>` : ''}
+      ${photos ? `<div class="task-photos">${photos}</div>` : ''}
+      ${completedHtml}
+      ${cancelledHtml}
+      ${canCancel ? `
+        <div class="task-actions">
+          <button class="btn btn-ghost btn-sm cancel-btn" data-id="${t.id}">🚫 作廢此單</button>
+          <span class="text-muted" style="font-size:12px">（只能作廢自己開的單，且倉管尚未完成）</span>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function bindCardEvents(container) {
+  container.querySelectorAll('.task-photos img').forEach(img => {
+    img.addEventListener('click', () => openLightbox(img.getAttribute('data-url')));
+  });
+  container.querySelectorAll('.cancel-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cancelTask(btn.getAttribute('data-id'));
+    });
+  });
+}
+
+// ============ 新增工單 ============
+async function handleSubmitTask(e) {
+  e.preventDefault();
+  const form = e.target;
+  const submitBtn = document.getElementById('submitBtn');
+  const fd = new FormData(form);
+
+  const title = (fd.get('title') || '').toString().trim();
+  if (!title) {
+    alert('請輸入標題');
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = '📤 處理中...';
+
+  try {
+    // 1. 先 INSERT 取得 task id
+    const { data: inserted, error } = await supabase.from('tasks').insert({
+      source: currentUser.location,
+      created_by_user_id: currentUser.id,
+      created_by_name: currentUser.name,
+      category: fd.get('category'),
+      customer_name: (fd.get('customer_name') || '').toString().trim() || null,
+      order_no: (fd.get('order_no') || '').toString().trim() || null,
+      title,
+      description: (fd.get('description') || '').toString().trim() || null,
+      priority: fd.get('urgent') ? 'urgent' : 'normal',
+      photos: []
+    }).select().single();
+
+    if (error) throw error;
+
+    // 2. 上傳照片
+    const files = document.getElementById('photoInput').files;
+    if (files.length > 0) {
+      submitBtn.textContent = '📤 上傳照片中...';
+      try {
+        const urls = await uploadPhotos(files, inserted.id);
+        await supabase.from('tasks').update({ photos: urls }).eq('id', inserted.id);
+      } catch (upErr) {
+        alert(upErr.message + '\n\n工單已建立但照片未上傳，請手動補上或重新建立。');
+      }
+    }
+
+    form.reset();
+    document.getElementById('photoInput').value = '';
+    await refreshAll();
+    showToast({
+      type: 'success',
+      title: '✅ 工單已送出',
+      message: title,
+      meta: '倉管會收到通知'
+    });
+  } catch (err) {
+    alert('送出失敗：' + err.message);
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = '📤 送出工單';
+  }
+}
+
+// ============ 作廢 ============
+async function cancelTask(taskId) {
+  const reason = prompt('請輸入作廢原因（可選，例：客服打錯資料）：') || null;
+  if (reason === null && !confirm('確定要作廢此工單嗎？')) return;
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .update({
+      status: 'cancelled',
+      cancelled_at: new Date().toISOString(),
+      cancelled_by_user_id: currentUser.id,
+      cancelled_by_name: currentUser.name,
+      cancellation_reason: reason
+    })
+    .eq('id', taskId)
+    .eq('status', 'pending')
+    .eq('created_by_user_id', currentUser.id)
+    .select();
+
+  if (error) {
+    alert('作廢失敗：' + error.message);
+    return;
+  }
+  if (!data || data.length === 0) {
+    alert('作廢失敗：此工單可能已被倉管完成，或不是您開立的。');
+    await refreshAll();
+    return;
+  }
+  await refreshAll();
+  showToast({ type: 'info', title: '🚫 工單已作廢', message: data[0].title });
+}
+
+// ============ 通知 ============
+async function refreshNotifications() {
+  // 撈 7 天內已完成 + 已作廢的工單，join notification_reads
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('id, title, status, source, created_by_name, completed_at, completed_by_name, completion_note, cancelled_at, cancelled_by_name')
+    .in('status', ['done', 'cancelled'])
+    .or(`completed_at.gte.${sevenDaysAgo},cancelled_at.gte.${sevenDaysAgo}`)
+    .order('completed_at', { ascending: false, nullsFirst: false });
+
+  if (error) {
+    console.warn('載入通知失敗:', error);
+    return;
+  }
+
+  // 撈該使用者已讀紀錄
+  const taskIds = (data || []).map(t => t.id);
+  let readSet = new Set();
+  if (taskIds.length > 0) {
+    const { data: reads } = await supabase
+      .from('notification_reads')
+      .select('task_id, event_type')
+      .eq('user_id', currentUser.id)
+      .in('task_id', taskIds);
+    if (reads) readSet = new Set(reads.map(r => `${r.task_id}_${r.event_type}`));
+  }
+
+  notifications = (data || []).map(t => {
+    const eventType = t.status === 'done' ? 'completed' : 'cancelled';
+    return {
+      ...t,
+      event_type: eventType,
+      is_read: readSet.has(`${t.id}_${eventType}`)
+    };
+  });
+
+  renderNotifications();
+}
+
+function renderNotifications() {
+  const list = document.getElementById('notifList');
+  const unread = notifications.filter(n => !n.is_read).length;
+  document.getElementById('notifUnread').textContent = `(${unread} 未讀)`;
+  const badge = document.getElementById('bellBadge');
+  badge.textContent = unread;
+  badge.classList.toggle('hidden', unread === 0);
+
+  if (notifications.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = notifications.map(n => {
+    const sourceLabel = LOCATION_ICON[n.source] + LOCATION_LABEL[n.source];
+    let title, sub;
+    if (n.event_type === 'completed') {
+      title = `✅ ${escapeHtml(n.title)} 已完成`;
+      sub = `🟡龍潭倉管 ${escapeHtml(n.completed_by_name || '')} · ${relativeTime(n.completed_at)}`;
+    } else {
+      title = `🚫 ${escapeHtml(n.title)} 已作廢`;
+      sub = `${escapeHtml(n.cancelled_by_name || '')} · ${relativeTime(n.cancelled_at)}`;
+    }
+    return `
+      <div class="notif-item ${n.is_read ? 'read' : ''}" data-id="${n.id}" data-event="${n.event_type}">
+        <span class="notif-dot"></span>
+        <div class="notif-content">
+          <div class="notif-title">${title}</div>
+          <div class="notif-sub">${sub}（原開立：${sourceLabel} ${escapeHtml(n.created_by_name)}）</div>
+        </div>
+      </div>`;
+  }).join('');
+  list.querySelectorAll('.notif-item').forEach(el => {
+    el.addEventListener('click', async () => {
+      await markRead(el.getAttribute('data-id'), el.getAttribute('data-event'));
+      await refreshNotifications();
+      window.onToastClick(el.getAttribute('data-id'));
+      document.getElementById('notifPanel').classList.remove('open');
+    });
+  });
+}
+
+// ============ Realtime ============
+function subscribeRealtime() {
+  supabase.channel('cs-channel-' + currentUser.id)
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'tasks'
+    }, async (payload) => {
+      const t = payload.new;
+      const old = payload.old;
+
+      // status 變成 done → 收到完成通知
+      if (t.status === 'done' && old.status !== 'done') {
+        const sourceLabel = LOCATION_ICON[t.source] + LOCATION_LABEL[t.source];
+        showToast({
+          type: 'success',
+          title: '✅ 工單已完成',
+          message: `${t.title}（${t.completed_by_name}）`,
+          meta: `原開立：${sourceLabel} ${t.created_by_name}`,
+          taskId: t.id
+        });
+        playAlert(false);
+        blinkTitle('🔔');
+        desktopNotify('✅ 工單已完成', `${t.title}（${t.completed_by_name}）`);
+      }
+      // status 變成 cancelled → 收到作廢通知（如果是 admin 作廢）
+      if (t.status === 'cancelled' && old.status !== 'cancelled' && t.cancelled_by_user_id !== currentUser.id) {
+        showToast({
+          type: 'normal',
+          title: '🚫 工單已作廢',
+          message: t.title,
+          meta: `作廢者：${t.cancelled_by_name}`,
+          taskId: t.id
+        });
+      }
+
+      await refreshAll();
+    })
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'tasks'
+    }, async () => {
+      // 別人開的單也要進處理中清單
+      await refreshTaskList();
+    })
+    .subscribe();
+}
+
+// ============ 歷史查詢 ============
+async function loadHistory() {
+  const from = document.getElementById('filterFrom').value;
+  const to = document.getElementById('filterTo').value;
+  const cat = document.getElementById('filterCategory').value;
+  const src = document.getElementById('filterSource').value;
+  const st = document.getElementById('filterStatus').value;
+  const cust = document.getElementById('filterCustomer').value.trim();
+
+  let q = supabase.from('tasks').select('*')
+    .gte('created_at', new Date(Date.now() - 90 * 86400000).toISOString())
+    .order('created_at', { ascending: false })
+    .limit(500);
+
+  if (from) q = q.gte('created_at', new Date(from).toISOString());
+  if (to) {
+    const d = new Date(to); d.setHours(23, 59, 59, 999);
+    q = q.lte('created_at', d.toISOString());
+  }
+  if (cat) q = q.eq('category', cat);
+  if (src) q = q.eq('source', src);
+  if (st) q = q.eq('status', st);
+  if (cust) q = q.ilike('customer_name', `%${cust}%`);
+
+  const { data, error } = await q;
+  if (error) {
+    alert('查詢失敗：' + error.message);
+    return;
+  }
+
+  const list = document.getElementById('historyList');
+  if (!data || data.length === 0) {
+    list.innerHTML = '<div class="empty">沒有符合條件的工單</div>';
+    return;
+  }
+  list.innerHTML = `<div class="text-muted mb-8">共 ${data.length} 筆</div>` + data.map(renderTaskCard).join('');
+  bindCardEvents(list);
+}
+</script>
+
+</body>
+</html>
