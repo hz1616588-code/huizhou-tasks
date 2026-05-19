@@ -95,6 +95,7 @@ async function refreshTaskList() {
     .from('tasks')
     .select('*')
     .or(`status.eq.pending,and(status.eq.done,completed_at.gte.${todayStart.toISOString()})`)
+    .neq('category', 'review')  // 倉管不接「審核」類別（會員入會由管理員處理）
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -143,7 +144,7 @@ function renderTaskCardForWarehouse(t) {
   const photos = (t.photos || []).map(url => `<img src="${escapeHtml(url)}" alt="照片" data-url="${escapeHtml(url)}">`).join('');
 
   return `
-    <div class="task-card ${isUrgent ? 'urgent' : ''}" data-task-id="${t.id}">
+    <div class="task-card ${CATEGORY_CLASS[t.category] || 'cat-other'} ${isUrgent ? 'urgent' : ''}" data-task-id="${t.id}">
       <div class="task-card-head">
         ${isUrgent ? '<span class="badge badge-urgent">🔴 急件</span>' : ''}
         ${categoryBadgeHtml(t.category)}
@@ -169,7 +170,7 @@ function renderTaskCardForWarehouse(t) {
 function renderTaskCardDone(t) {
   const sourceLabel = sourceBadgeHtml(t.source, t.created_by_name);
   return `
-    <div class="task-card" data-task-id="${t.id}" style="opacity:0.95">
+    <div class="task-card ${CATEGORY_CLASS[t.category] || 'cat-other'}" data-task-id="${t.id}" style="opacity:0.95">
       <div class="task-card-head">
         <span class="badge badge-done">✅ 已完成</span>
         ${categoryBadgeHtml(t.category)}
@@ -245,20 +246,23 @@ async function completeTask(taskId, note) {
 async function refreshNotifications() {
   const sevenDaysAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
 
-  // 1. 新工單事件
+  // 1. 新工單事件（不含審核類別）
   const { data: tasksData } = await supabase
     .from('tasks')
-    .select('id, title, priority, source, created_by_name, customer_name, order_no, created_at, status')
-    .gte('created_at', sevenDaysAgoIso);
+    .select('id, title, priority, source, created_by_name, customer_name, order_no, created_at, status, category')
+    .gte('created_at', sevenDaysAgoIso)
+    .neq('category', 'review');
 
-  // 2. 留言事件（非作廢工單、非自己留的）
+  // 2. 留言事件（非作廢工單、非審核工單、非自己留的）
   const { data: commentsData } = await supabase
     .from('task_comments')
-    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status)')
+    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status, category)')
     .gte('created_at', sevenDaysAgoIso)
     .neq('user_id', currentUser.id);
 
-  const filteredComments = (commentsData || []).filter(c => c.tasks && c.tasks.status !== 'cancelled');
+  const filteredComments = (commentsData || []).filter(c =>
+    c.tasks && c.tasks.status !== 'cancelled' && c.tasks.category !== 'review'
+  );
 
   // 3. 撈已讀紀錄
   const allTaskIds = [...new Set([
@@ -379,6 +383,8 @@ function subscribeRealtime() {
       table: 'tasks'
     }, async (payload) => {
       const t = payload.new;
+      // 倉管不接「審核」類別工單，連 toast/聲音/桌面通知都跳過
+      if (t.category === 'review') return;
       const isUrgent = t.priority === 'urgent';
       const sourceLabel = LOCATION_ICON[t.source] + LOCATION_LABEL[t.source];
       showToast({
@@ -413,7 +419,8 @@ function subscribeRealtime() {
         const { data } = await supabase.from('tasks').select('*').eq('id', c.task_id).single();
         task = data;
       }
-      if (!task || task.status === 'cancelled') return;
+      // 倉管：作廢工單或審核工單上的留言都不通知
+      if (!task || task.status === 'cancelled' || task.category === 'review') return;
       const icon = LOCATION_ICON[c.user_location] || '👤';
       showToast({
         type: 'info',

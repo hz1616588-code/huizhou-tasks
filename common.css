@@ -446,11 +446,21 @@ textarea.form-control {
 .badge-admin { background: #EDE9FE; color: var(--admin); }
 .badge-warehouse { background: #FEF3C7; color: #92400E; }
 
-.badge-category {
-  background: var(--cream);
-  color: var(--accent-dark);
-  border: 1px solid var(--accent-light);
-}
+/* 類別標籤（各類別不同色）*/
+.badge-cat-shipment { background: #DBEAFE; color: #1E40AF; border: 1px solid #93C5FD; }
+.badge-cat-return   { background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; }
+.badge-cat-inquiry  { background: #CFFAFE; color: #155E75; border: 1px solid #67E8F9; }
+.badge-cat-review   { background: #EDE9FE; color: #5B21B6; border: 1px solid #C4B5FD; font-weight: 800; }
+.badge-cat-other    { background: #F3F4F6; color: #4B5563; border: 1px solid #D1D5DB; }
+
+/* 卡片左側色條（同類別配色，一眼分辨）*/
+.task-card.cat-shipment { border-left: 6px solid #3B82F6; }
+.task-card.cat-return   { border-left: 6px solid #F59E0B; }
+.task-card.cat-inquiry  { border-left: 6px solid #06B6D4; }
+.task-card.cat-review   { border-left: 6px solid #8B5CF6; background: linear-gradient(to right, #F5F3FF 0%, white 35%); }
+.task-card.cat-other    { border-left: 6px solid #6B7280; }
+/* 急件邊框優先於類別色條 */
+.task-card.urgent { border-left-width: 0; }
 
 /* ===== Toast 彈窗 ===== */
 .toast-stack {

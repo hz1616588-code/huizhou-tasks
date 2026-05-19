@@ -28,7 +28,16 @@ const CATEGORY_LABEL = {
   shipment: '出貨',
   return: '退換貨',
   inquiry: '查詢',
+  review: '審核',
   other: '其他'
+};
+
+const CATEGORY_CLASS = {
+  shipment: 'cat-shipment',
+  return: 'cat-return',
+  inquiry: 'cat-inquiry',
+  review: 'cat-review',
+  other: 'cat-other'
 };
 
 const STORAGE_KEY = 'huizhou_user_id';
@@ -406,7 +415,8 @@ function sourceBadgeHtml(source, name) {
 }
 
 function categoryBadgeHtml(cat) {
-  return `<span class="badge badge-category">${CATEGORY_LABEL[cat] || cat}</span>`;
+  const cls = CATEGORY_CLASS[cat] || 'cat-other';
+  return `<span class="badge badge-${cls}">${CATEGORY_LABEL[cat] || cat}</span>`;
 }
 
 // ===== 通知面板開合 =====

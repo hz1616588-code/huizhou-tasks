@@ -79,6 +79,7 @@
               <option value="shipment">出貨</option>
               <option value="return">退換貨</option>
               <option value="inquiry">查詢</option>
+              <option value="review">審核（會員入會）</option>
               <option value="other">其他</option>
             </select>
           </div>
@@ -170,6 +171,7 @@
             <option value="shipment">出貨</option>
             <option value="return">退換貨</option>
             <option value="inquiry">查詢</option>
+            <option value="review">審核</option>
             <option value="other">其他</option>
           </select>
         </div>
@@ -222,6 +224,7 @@
               <option value="shipment">出貨</option>
               <option value="return">退換貨</option>
               <option value="inquiry">查詢</option>
+              <option value="review">審核（會員入會）</option>
               <option value="other">其他</option>
             </select>
           </div>
@@ -413,7 +416,7 @@ function renderAdminCard(t, withActions) {
   }
 
   return `
-    <div class="task-card ${isUrgent && t.status === 'pending' ? 'urgent' : ''} ${t.status === 'cancelled' ? 'cancelled' : ''}" data-task-id="${t.id}">
+    <div class="task-card ${CATEGORY_CLASS[t.category] || 'cat-other'} ${isUrgent && t.status === 'pending' ? 'urgent' : ''} ${t.status === 'cancelled' ? 'cancelled' : ''}" data-task-id="${t.id}">
       <div class="task-card-head">
         ${isUrgent ? '<span class="badge badge-urgent">🔴 急件</span>' : ''}
         ${categoryBadgeHtml(t.category)}

@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   source TEXT NOT NULL CHECK (source IN ('zhongli_cs','longtan_cs')),
   created_by_user_id UUID NOT NULL REFERENCES users(id),
   created_by_name TEXT NOT NULL,
-  category TEXT NOT NULL CHECK (category IN ('shipment','return','inquiry','other')),
+  category TEXT NOT NULL CHECK (category IN ('shipment','return','inquiry','review','other')),
   customer_name TEXT,
   order_no TEXT,
   title TEXT NOT NULL,
@@ -134,6 +134,11 @@ CREATE INDEX IF NOT EXISTS idx_notif_reads_user ON notification_reads(user_id, e
 ALTER TABLE notification_reads DROP CONSTRAINT IF EXISTS notification_reads_event_type_check;
 ALTER TABLE notification_reads ADD CONSTRAINT notification_reads_event_type_check
   CHECK (event_type IN ('new','completed','cancelled','comment'));
+
+-- Migration: 若 tasks 已存在（舊版未含 'review' 類別），更新 CHECK 約束
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_category_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_category_check
+  CHECK (category IN ('shipment','return','inquiry','review','other'));
 
 -- ============================================
 -- ④ 啟用 Realtime（可重複執行）
