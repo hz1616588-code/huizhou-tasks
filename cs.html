@@ -501,15 +501,23 @@ async function refreshNotifications() {
     return false;
   });
 
-  // 2. 留言事件（非作廢工單、非自己留的）
+  // 2. 留言事件（非作廢工單、非自己留的、且我是該工單的參與者）
   const { data: commentsData, error: cErr } = await supabase
     .from('task_comments')
-    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status, source, created_by_user_id, created_by_name)')
+    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status, source, created_by_user_id, created_by_name, completed_by_user_id)')
     .gte('created_at', sevenDaysAgoIso)
     .neq('user_id', currentUser.id);
   if (cErr) console.warn('載入通知（comments）失敗:', cErr);
 
-  const filteredComments = (commentsData || []).filter(c => c.tasks && c.tasks.status !== 'cancelled');
+  // 建立 task_id → 參與者 user_id 集合 的對照表
+  const commentTaskIds = [...new Set((commentsData || []).map(c => c.task_id))];
+  const tasksMeta = (commentsData || []).map(c => c.tasks).filter(Boolean);
+  const participantsMap = await buildParticipantsMap(commentTaskIds, tasksMeta);
+
+  const filteredComments = (commentsData || []).filter(c => {
+    if (!c.tasks || c.tasks.status === 'cancelled') return false;
+    return participantsMap.get(c.task_id)?.has(currentUser.id) ?? false;
+  });
 
   // 3. 撈已讀紀錄
   const allTaskIds = [...new Set([
@@ -691,7 +699,9 @@ function subscribeRealtime() {
       }
       if (!task || task.status === 'cancelled') return;
 
-      // CS 收 toast 規則：所有非作廢工單的留言（共用內部通訊）
+      // 只通知參與者（開單者 / 完成者 / 曾留言者 / admin）
+      if (!(await isCurrentUserParticipantOf(c.task_id))) return;
+
       const icon = LOCATION_ICON[c.user_location] || '👤';
       showToast({
         type: 'info',

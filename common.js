@@ -66,6 +66,52 @@ function canCurrentUserComplete(task) {
   return allowed.includes(currentUser.location);
 }
 
+// ===== 工單參與者判斷（用於留言通知過濾）=====
+// 參與者 = 開單者 + 完成者 + 所有曾留言的人 + admin（永遠算）
+async function getTaskParticipants(taskId) {
+  const set = new Set();
+  const { data: t } = await supabase
+    .from('tasks')
+    .select('created_by_user_id, completed_by_user_id')
+    .eq('id', taskId).maybeSingle();
+  if (t) {
+    if (t.created_by_user_id) set.add(t.created_by_user_id);
+    if (t.completed_by_user_id) set.add(t.completed_by_user_id);
+  }
+  const { data: cs } = await supabase
+    .from('task_comments').select('user_id').eq('task_id', taskId);
+  for (const c of (cs || [])) set.add(c.user_id);
+  return set;
+}
+
+async function isCurrentUserParticipantOf(taskId) {
+  if (!currentUser) return false;
+  // admin 也走參與者規則（不關自己事的不吵）— 想看所有對話可進管理員頁的「所有工單」
+  const participants = await getTaskParticipants(taskId);
+  return participants.has(currentUser.id);
+}
+
+// 批次版：給 refreshNotifications 用，一次撈完省 query
+// 回傳 Map<taskId, Set<userId>>
+async function buildParticipantsMap(taskIds, tasksWithMeta = []) {
+  const map = new Map();
+  if (!taskIds.length) return map;
+  // 先用 tasksWithMeta（從 refreshNotifications 帶來的工單資料）初始化開單者/完成者
+  for (const t of tasksWithMeta) {
+    if (!map.has(t.id)) map.set(t.id, new Set());
+    if (t.created_by_user_id) map.get(t.id).add(t.created_by_user_id);
+    if (t.completed_by_user_id) map.get(t.id).add(t.completed_by_user_id);
+  }
+  // 再撈所有相關 task 的留言者
+  const { data: cs } = await supabase
+    .from('task_comments').select('task_id, user_id').in('task_id', taskIds);
+  for (const c of (cs || [])) {
+    if (!map.has(c.task_id)) map.set(c.task_id, new Set());
+    map.get(c.task_id).add(c.user_id);
+  }
+  return map;
+}
+
 const STORAGE_KEY = 'huizhou_user_id';
 
 // ===== 全域使用者狀態 =====

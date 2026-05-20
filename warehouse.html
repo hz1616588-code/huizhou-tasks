@@ -38,6 +38,52 @@
 
 <div class="container">
 
+  <!-- ⓪ 新增工單（倉管也可以提問客服）-->
+  <section class="section collapsible collapsed" id="newTaskSection">
+    <h3 class="section-title">➕ 新增工單（問客服）</h3>
+    <div class="section-body">
+      <form id="newTaskForm">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>類別 <span class="required">*</span></label>
+            <select class="form-control" name="category" required>
+              <option value="inquiry">查詢（最常用）</option>
+              <option value="shipment">出貨</option>
+              <option value="return">退換貨</option>
+              <option value="other">其他</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>急件</label>
+            <div class="checkbox-row">
+              <input type="checkbox" id="urgentChk" name="urgent">
+              <label for="urgentChk">🚨 標記為急件</label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>客戶編號或姓名</label>
+            <input class="form-control" name="customer_name">
+          </div>
+          <div class="form-group">
+            <label>訂單號</label>
+            <input class="form-control" name="order_no">
+          </div>
+          <div class="form-group full">
+            <label>工單內容 <span class="required">*</span></label>
+            <textarea class="form-control" name="title" required rows="3" placeholder="例：客戶 #1234 的貨已在倉庫超過 1 個月，請問要不要請客戶領取（可寫多行）"></textarea>
+          </div>
+          <div class="form-group full">
+            <label>照片（可選多張）</label>
+            <input type="file" class="form-control" id="photoInput" multiple accept="image/*">
+          </div>
+          <div class="full text-right">
+            <button type="submit" id="submitBtn" class="btn btn-accent btn-lg">📤 送出工單</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </section>
+
   <!-- ① 待辦清單 -->
   <section class="section">
     <h3 class="section-title">📋 待辦清單 <span class="count" id="pendingCount">0</span></h3>
@@ -75,6 +121,10 @@ let notifications = [];
     document.getElementById('doneSection').querySelector('.section-title').addEventListener('click', (e) => {
       e.currentTarget.parentElement.classList.toggle('collapsed');
     });
+    document.getElementById('newTaskSection').querySelector('.section-title').addEventListener('click', (e) => {
+      e.currentTarget.parentElement.classList.toggle('collapsed');
+    });
+    document.getElementById('newTaskForm').addEventListener('submit', handleSubmitTask);
 
     await refreshAll();
     subscribeRealtime();
@@ -206,6 +256,57 @@ function bindCardEvents(container) {
   container.querySelectorAll('.task-card').forEach(card => bindCommentsEvents(card));
 }
 
+// ============ 倉管新增工單（問客服）============
+async function handleSubmitTask(e) {
+  e.preventDefault();
+  const form = e.target;
+  const submitBtn = document.getElementById('submitBtn');
+  const fd = new FormData(form);
+
+  const title = (fd.get('title') || '').toString().trim();
+  if (!title) { alert('請輸入工單內容'); return; }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = '📤 處理中...';
+
+  const taskId = crypto.randomUUID();
+  const files = document.getElementById('photoInput').files;
+  let photoUrls = [];
+
+  try {
+    if (files.length > 0) {
+      submitBtn.textContent = `📤 上傳照片中... (0/${files.length})`;
+      photoUrls = await uploadPhotos(files, taskId);
+    }
+    submitBtn.textContent = '📤 建立工單中...';
+    const { error } = await supabase.from('tasks').insert({
+      id: taskId,
+      source: 'longtan_wh',
+      created_by_user_id: currentUser.id,
+      created_by_name: currentUser.name,
+      category: fd.get('category'),
+      customer_name: (fd.get('customer_name') || '').toString().trim() || null,
+      order_no: (fd.get('order_no') || '').toString().trim() || null,
+      title,
+      description: null,
+      priority: fd.get('urgent') ? 'urgent' : 'normal',
+      photos: photoUrls
+    });
+    if (error) throw error;
+
+    form.reset();
+    document.getElementById('photoInput').value = '';
+    document.getElementById('newTaskSection').classList.add('collapsed');
+    await refreshAll();
+    showToast({ type: 'success', title: '✅ 工單已送出', message: title, meta: '客服會收到通知' });
+  } catch (err) {
+    alert('送出失敗：' + err.message + '\n\n工單尚未建立，請重新送出。');
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = '📤 送出工單';
+  }
+}
+
 async function completeTask(taskId, note) {
   const btn = document.querySelector(`.complete-btn[data-id="${taskId}"]`);
   if (btn) { btn.disabled = true; btn.textContent = '處理中...'; }
@@ -258,16 +359,21 @@ async function refreshNotifications() {
     .gte('created_at', sevenDaysAgoIso)
     .neq('category', 'review');
 
-  // 2. 留言事件（不含「審核」工單、非作廢、非自己留的）
+  // 2. 留言事件（不含「審核」工單、非作廢、非自己留的、且我是該工單的參與者）
   const { data: commentsData } = await supabase
     .from('task_comments')
-    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status, category)')
+    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status, category, created_by_user_id, completed_by_user_id)')
     .gte('created_at', sevenDaysAgoIso)
     .neq('user_id', currentUser.id);
 
-  const filteredComments = (commentsData || []).filter(c =>
-    c.tasks && c.tasks.status !== 'cancelled' && c.tasks.category !== 'review'
-  );
+  const commentTaskIds = [...new Set((commentsData || []).map(c => c.task_id))];
+  const tasksMeta = (commentsData || []).map(c => c.tasks).filter(Boolean);
+  const participantsMap = await buildParticipantsMap(commentTaskIds, tasksMeta);
+
+  const filteredComments = (commentsData || []).filter(c => {
+    if (!c.tasks || c.tasks.status === 'cancelled' || c.tasks.category === 'review') return false;
+    return participantsMap.get(c.task_id)?.has(currentUser.id) ?? false;
+  });
 
   // 3. 撈已讀紀錄
   const allTaskIds = [...new Set([
@@ -426,6 +532,8 @@ function subscribeRealtime() {
       }
       // 倉管：作廢工單或審核工單上的留言都不通知
       if (!task || task.status === 'cancelled' || task.category === 'review') return;
+      // 只通知參與者（開單者 / 完成者 / 曾留言者 / admin）
+      if (!(await isCurrentUserParticipantOf(c.task_id))) return;
       const icon = LOCATION_ICON[c.user_location] || '👤';
       showToast({
         type: 'info',

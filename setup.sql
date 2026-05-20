@@ -49,7 +49,7 @@ ON CONFLICT (name, location) DO NOTHING;
 CREATE TABLE IF NOT EXISTS tasks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  source TEXT NOT NULL CHECK (source IN ('zhongli_cs','longtan_cs','admin')),
+  source TEXT NOT NULL CHECK (source IN ('zhongli_cs','longtan_cs','longtan_wh','admin')),
   created_by_user_id UUID NOT NULL REFERENCES users(id),
   created_by_name TEXT NOT NULL,
   category TEXT NOT NULL CHECK (category IN ('shipment','return','inquiry','review','other')),
@@ -140,10 +140,10 @@ ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_category_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_category_check
   CHECK (category IN ('shipment','return','inquiry','review','other'));
 
--- Migration: 若 tasks 已存在（舊版未含 'admin' 來源），更新 source CHECK 約束
+-- Migration: 若 tasks 已存在（舊版未含 'longtan_wh' 來源），更新 source CHECK 約束
 ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_source_check
-  CHECK (source IN ('zhongli_cs','longtan_cs','admin'));
+  CHECK (source IN ('zhongli_cs','longtan_cs','longtan_wh','admin'));
 
 -- ============================================
 -- ④ 啟用 Realtime（可重複執行）

@@ -652,10 +652,10 @@ async function refreshNotifications() {
     .select('*')
     .or(`created_at.gte.${sevenDaysAgoIso},completed_at.gte.${sevenDaysAgoIso},cancelled_at.gte.${sevenDaysAgoIso}`);
 
-  // 2. 留言事件（非自己留的，admin 可見所有對話，含已作廢工單上的歷史對話）
+  // 2. 留言事件（admin 可見所有對話，含已作廢工單上的歷史對話）
   const { data: commentsData } = await supabase
     .from('task_comments')
-    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status)')
+    .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status, created_by_user_id, completed_by_user_id)')
     .gte('created_at', sevenDaysAgoIso)
     .neq('user_id', currentUser.id);
 
@@ -702,7 +702,13 @@ async function refreshNotifications() {
       });
     }
   }
+  // 留言只在「我是參與者」時納入（開單者、完成者、曾留言者）
+  const commentTaskIds = [...new Set((commentsData || []).map(c => c.task_id))];
+  const tasksMeta = (commentsData || []).map(c => c.tasks).filter(Boolean);
+  const participantsMap = await buildParticipantsMap(commentTaskIds, tasksMeta);
+
   for (const c of (commentsData || [])) {
+    if (!participantsMap.get(c.task_id)?.has(currentUser.id)) continue;
     const lastReadIso = readMap.get(`${c.task_id}_comment`);
     const is_read = !!(lastReadIso && new Date(lastReadIso) >= new Date(c.created_at));
     items.push({
@@ -837,6 +843,8 @@ function subscribeRealtime() {
       const c = payload.new;
       handleIncomingComment(c);
       if (c.user_id === currentUser.id) return;
+      // 只通知參與者（開單者 / 完成者 / 曾留言者）
+      if (!(await isCurrentUserParticipantOf(c.task_id))) return;
       let task = allTasks.find(t => t.id === c.task_id);
       if (!task) {
         const { data } = await supabase.from('tasks').select('*').eq('id', c.task_id).single();
