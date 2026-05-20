@@ -124,12 +124,17 @@ function showIdentityPicker(users) {
         </div>
         <div class="modal-body">
           <div class="identity-list">
-            ${users.map(u => `
-              <button class="identity-option" data-id="${u.id}">
-                <span class="badge ${LOCATION_BADGE_CLASS[u.location]}">${LOCATION_ICON[u.location]} ${LOCATION_LABEL[u.location]}</span>
-                <span class="identity-name">${escapeHtml(u.name)}</span>
-              </button>
-            `).join('')}
+            ${users.map(u => {
+              const icon = LOCATION_ICON[u.location];
+              const loc = LOCATION_LABEL[u.location];
+              const badgeContent = u.location === 'admin' ? icon : `${icon} ${loc}`;
+              return `
+                <button class="identity-option" data-id="${u.id}">
+                  <span class="badge ${LOCATION_BADGE_CLASS[u.location]}">${badgeContent}</span>
+                  <span class="identity-name">${escapeHtml(u.name)}</span>
+                </button>
+              `;
+            }).join('')}
           </div>
         </div>
       </div>
@@ -156,8 +161,10 @@ function renderUserChip(targetEl) {
   if (!currentUser) return;
   const icon = LOCATION_ICON[currentUser.location];
   const loc = LOCATION_LABEL[currentUser.location];
+  // admin 不顯示「管理員」文字，僅留 icon + 姓名
+  const labelPart = currentUser.location === 'admin' ? '' : ` ${loc}`;
   targetEl.innerHTML = `
-    <span>👤 ${icon} ${loc} ${escapeHtml(currentUser.name)}</span>
+    <span>👤 ${icon}${labelPart} ${escapeHtml(currentUser.name)}</span>
     <button class="change-btn" onclick="changeIdentity()">變更</button>
   `;
 }
@@ -437,6 +444,10 @@ function sourceBadgeHtml(source, name) {
   const cls = LOCATION_BADGE_CLASS[source];
   const icon = LOCATION_ICON[source];
   const loc = LOCATION_LABEL[source];
+  // admin 來源只顯示 icon + 姓名（不加「管理員」字樣，icon 已能辨識）
+  if (source === 'admin') {
+    return `<span class="badge ${cls}">${icon} ${escapeHtml(name)}</span>`;
+  }
   return `<span class="badge ${cls}">${icon} ${loc} ${escapeHtml(name)}</span>`;
 }
 
