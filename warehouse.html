@@ -100,7 +100,7 @@ async function refreshTaskList() {
     .from('tasks')
     .select('*')
     .or(`status.eq.pending,and(status.eq.done,completed_at.gte.${todayStart.toISOString()})`)
-    .neq('category', 'review')  // 倉管不接「審核」類別（會員入會由管理員處理）
+    .in('category', ['shipment', 'return'])  // 倉管只處理出貨/退換貨；查詢/審核/其他歸客服或管理員
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -251,14 +251,14 @@ async function completeTask(taskId, note) {
 async function refreshNotifications() {
   const sevenDaysAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
 
-  // 1. 新工單事件（不含審核類別）
+  // 1. 新工單事件（倉管只關心出貨/退換貨）
   const { data: tasksData } = await supabase
     .from('tasks')
     .select('id, title, priority, source, created_by_name, customer_name, order_no, created_at, status, category')
     .gte('created_at', sevenDaysAgoIso)
-    .neq('category', 'review');
+    .in('category', ['shipment', 'return']);
 
-  // 2. 留言事件（非作廢工單、非審核工單、非自己留的）
+  // 2. 留言事件（只看 出貨/退換貨 工單的留言、非作廢、非自己留的）
   const { data: commentsData } = await supabase
     .from('task_comments')
     .select('id, task_id, user_id, user_name, user_location, content, photos, created_at, tasks(id, title, status, category)')
@@ -266,7 +266,8 @@ async function refreshNotifications() {
     .neq('user_id', currentUser.id);
 
   const filteredComments = (commentsData || []).filter(c =>
-    c.tasks && c.tasks.status !== 'cancelled' && c.tasks.category !== 'review'
+    c.tasks && c.tasks.status !== 'cancelled'
+    && ['shipment', 'return'].includes(c.tasks.category)
   );
 
   // 3. 撈已讀紀錄
@@ -388,8 +389,8 @@ function subscribeRealtime() {
       table: 'tasks'
     }, async (payload) => {
       const t = payload.new;
-      // 倉管不接「審核」類別工單，連 toast/聲音/桌面通知都跳過
-      if (t.category === 'review') return;
+      // 倉管只關心出貨/退換貨，其餘類別連 toast/聲音/桌面通知都跳過
+      if (!['shipment', 'return'].includes(t.category)) return;
       const isUrgent = t.priority === 'urgent';
       const sourceLabel = LOCATION_ICON[t.source] + LOCATION_LABEL[t.source];
       showToast({
@@ -424,8 +425,9 @@ function subscribeRealtime() {
         const { data } = await supabase.from('tasks').select('*').eq('id', c.task_id).single();
         task = data;
       }
-      // 倉管：作廢工單或審核工單上的留言都不通知
-      if (!task || task.status === 'cancelled' || task.category === 'review') return;
+      // 倉管：只通知出貨/退換貨工單的留言（其餘類別歸客服或管理員）
+      if (!task || task.status === 'cancelled'
+          || !['shipment', 'return'].includes(task.category)) return;
       const icon = LOCATION_ICON[c.user_location] || '👤';
       showToast({
         type: 'info',

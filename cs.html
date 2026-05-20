@@ -260,6 +260,7 @@ function renderDoneToday() {
 function renderTaskCard(t) {
   const isUrgent = t.priority === 'urgent';
   const canCancel = t.status === 'pending' && t.created_by_user_id === currentUser.id;
+  const canComplete = canCurrentUserComplete(t);
   const sourceLabel = sourceBadgeHtml(t.source, t.created_by_name);
 
   let statusHtml = '';
@@ -308,10 +309,15 @@ function renderTaskCard(t) {
       ${photos ? `<div class="task-photos">${photos}</div>` : ''}
       ${completedHtml}
       ${cancelledHtml}
-      ${canCancel ? `
+      ${(canCancel || canComplete) ? `
         <div class="task-actions">
-          <button class="btn btn-ghost btn-sm cancel-btn" data-id="${t.id}">🚫 作廢此單</button>
-          <span class="text-muted" style="font-size:12px">（只能作廢自己開的單，且倉管尚未完成）</span>
+          ${canComplete ? `
+            <input type="text" class="form-control note-input" placeholder="完成備註（可選）" data-id="${t.id}">
+            <button class="btn btn-success btn-sm complete-btn" data-id="${t.id}">✅ 完成</button>
+          ` : ''}
+          ${canCancel ? `
+            <button class="btn btn-ghost btn-sm cancel-btn" data-id="${t.id}">🚫 作廢</button>
+          ` : ''}
         </div>
       ` : ''}
       ${renderCommentsSection(t, t._comment_count || 0)}
@@ -329,8 +335,55 @@ function bindCardEvents(container) {
       cancelTask(btn.getAttribute('data-id'));
     });
   });
+  container.querySelectorAll('.complete-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute('data-id');
+      const noteInput = container.querySelector(`.note-input[data-id="${id}"]`);
+      completeTask(id, noteInput ? noteInput.value.trim() : '');
+    });
+  });
   // 對話區
   container.querySelectorAll('.task-card').forEach(card => bindCommentsEvents(card));
+}
+
+async function completeTask(taskId, note) {
+  const btn = document.querySelector(`.complete-btn[data-id="${taskId}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '處理中...'; }
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .update({
+      status: 'done',
+      completed_at: new Date().toISOString(),
+      completed_by_user_id: currentUser.id,
+      completed_by_name: currentUser.name,
+      completion_note: note || null
+    })
+    .eq('id', taskId)
+    .eq('status', 'pending')
+    .select();
+
+  if (error) {
+    alert('完成失敗：' + error.message);
+    if (btn) { btn.disabled = false; btn.textContent = '✅ 完成'; }
+    return;
+  }
+  if (!data || data.length === 0) {
+    const { data: latest } = await supabase
+      .from('tasks').select('status, completed_by_name, cancelled_by_name').eq('id', taskId).single();
+    if (latest?.status === 'done') {
+      alert(`此工單已被「${latest.completed_by_name || '其他人'}」完成`);
+    } else if (latest?.status === 'cancelled') {
+      alert(`此工單已被「${latest.cancelled_by_name || '其他人'}」作廢`);
+    } else {
+      alert('此工單狀態已變更，請重新整理');
+    }
+    await refreshAll();
+    return;
+  }
+  await refreshAll();
+  showToast({ type: 'success', title: '✅ 完成', message: data[0].title });
 }
 
 // ============ 新增工單 ============
@@ -580,8 +633,8 @@ function subscribeRealtime() {
       const t = payload.new;
       const old = payload.old;
 
-      // status 變成 done → 收到完成通知
-      if (t.status === 'done' && old.status !== 'done') {
+      // status 變成 done → 收到完成通知（自己完成自己的不彈窗）
+      if (t.status === 'done' && old.status !== 'done' && t.completed_by_user_id !== currentUser.id) {
         const sourceLabel = LOCATION_ICON[t.source] + LOCATION_LABEL[t.source];
         showToast({
           type: 'success',

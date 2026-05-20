@@ -49,6 +49,24 @@ const CATEGORY_CLASS = {
   other: 'cat-other'
 };
 
+// 各類別由哪些角色完成（admin 可完成任何類別）
+//   出貨 / 退換貨 → 倉管處理
+//   查詢 / 審核 / 其他 → 客服處理（admin 也可代完成）
+const COMPLETABLE_BY = {
+  shipment: ['longtan_wh', 'admin'],
+  return:   ['longtan_wh', 'admin'],
+  inquiry:  ['zhongli_cs', 'longtan_cs', 'admin'],
+  review:   ['zhongli_cs', 'longtan_cs', 'admin'],
+  other:    ['zhongli_cs', 'longtan_cs', 'admin']
+};
+
+function canCurrentUserComplete(task) {
+  if (!currentUser || !task || task.status !== 'pending') return false;
+  const allowed = COMPLETABLE_BY[task.category];
+  if (!allowed) return false;
+  return allowed.includes(currentUser.location);
+}
+
 const STORAGE_KEY = 'huizhou_user_id';
 
 // ===== 全域使用者狀態 =====
