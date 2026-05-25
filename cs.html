@@ -276,7 +276,7 @@ function renderTaskCard(t) {
   if (t.status === 'done') {
     completedHtml = `
       <div class="task-meta" style="background:var(--success-bg);padding:8px;border-radius:6px">
-        <strong>✅ 倉管：${escapeHtml(t.completed_by_name || '')}</strong>
+        <strong>✅ 完成：${escapeHtml(t.completed_by_name || '')}</strong>
         <span>${formatDateTime(t.completed_at)}</span>
         ${t.completion_note ? `<span>備註：${escapeHtml(t.completion_note)}</span>` : ''}
       </div>`;
@@ -309,18 +309,18 @@ function renderTaskCard(t) {
       ${photos ? `<div class="task-photos">${photos}</div>` : ''}
       ${completedHtml}
       ${cancelledHtml}
+      ${renderCommentsSection(t, t._comment_count || 0)}
       ${(canCancel || canComplete) ? `
-        <div class="task-actions">
+        <div class="task-actions" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
           ${canComplete ? `
             <input type="text" class="form-control note-input" placeholder="完成備註（可選）" data-id="${t.id}">
-            <button class="btn btn-success btn-sm complete-btn" data-id="${t.id}">✅ 完成</button>
+            <button class="btn btn-success btn-sm complete-btn" data-id="${t.id}">✅ 完成此單</button>
           ` : ''}
           ${canCancel ? `
             <button class="btn btn-ghost btn-sm cancel-btn" data-id="${t.id}">🚫 作廢</button>
           ` : ''}
         </div>
       ` : ''}
-      ${renderCommentsSection(t, t._comment_count || 0)}
     </div>
   `;
 }

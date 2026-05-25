@@ -392,7 +392,7 @@ function renderAdminCard(t, withActions) {
   if (t.status === 'done') {
     extraInfo = `
       <div class="task-meta" style="background:var(--success-bg);padding:8px;border-radius:6px">
-        <strong>✅ 倉管：${escapeHtml(t.completed_by_name || '')}</strong>
+        <strong>✅ 完成：${escapeHtml(t.completed_by_name || '')}</strong>
         <span>${formatDateTime(t.completed_at)}</span>
         ${t.completion_note ? `<span>備註：${escapeHtml(t.completion_note)}</span>` : ''}
       </div>`;
@@ -409,9 +409,9 @@ function renderAdminCard(t, withActions) {
   let actions = '';
   if (withActions && t.status === 'pending') {
     actions = `
-      <div class="task-actions">
+      <div class="task-actions" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
         <input type="text" class="form-control note-input" placeholder="完成備註（可選）" data-id="${t.id}">
-        <button class="btn btn-success btn-sm complete-btn" data-id="${t.id}">✅ 代完成</button>
+        <button class="btn btn-success btn-sm complete-btn" data-id="${t.id}">✅ 完成此單</button>
         <button class="btn btn-ghost btn-sm edit-btn" data-id="${t.id}">✏️ 編輯</button>
         <button class="btn btn-danger btn-sm cancel-btn" data-id="${t.id}">🚫 作廢</button>
       </div>
@@ -435,8 +435,8 @@ function renderAdminCard(t, withActions) {
       ${t.description ? `<div class="task-body">${escapeHtml(t.description)}</div>` : ''}
       ${photos ? `<div class="task-photos">${photos}</div>` : ''}
       ${extraInfo}
-      ${actions}
       ${renderCommentsSection(t, t._comment_count || 0)}
+      ${actions}
     </div>
   `;
 }
@@ -487,14 +487,11 @@ async function handleNewTask(e) {
 
     submitBtn.textContent = '📤 建立工單中...';
     const sourceVal = fd.get('source');
-    const nameVal = sourceVal === 'admin'
-      ? currentUser.name
-      : currentUser.name + '(管理員代開)';
     const { error } = await supabase.from('tasks').insert({
       id: taskId,
       source: sourceVal,
       created_by_user_id: currentUser.id,
-      created_by_name: nameVal,
+      created_by_name: currentUser.name,
       category: fd.get('category'),
       customer_name: (fd.get('customer_name') || '').toString().trim() || null,
       order_no: (fd.get('order_no') || '').toString().trim() || null,
@@ -527,7 +524,7 @@ async function completeTask(taskId, note) {
       status: 'done',
       completed_at: new Date().toISOString(),
       completed_by_user_id: currentUser.id,
-      completed_by_name: currentUser.name + '(管理員代完成)',
+      completed_by_name: currentUser.name,
       completion_note: note || null
     })
     .eq('id', taskId)

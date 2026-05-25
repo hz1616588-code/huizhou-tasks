@@ -207,10 +207,18 @@ function renderUserChip(targetEl) {
   if (!currentUser) return;
   const icon = LOCATION_ICON[currentUser.location];
   const loc = LOCATION_LABEL[currentUser.location];
-  // admin 不顯示「管理員」文字，僅留 icon + 姓名
-  const labelPart = currentUser.location === 'admin' ? '' : ` ${loc}`;
+  let display;
+  if (currentUser.location === 'admin') {
+    // admin 不顯示「管理員」文字
+    display = `${icon} ${escapeHtml(currentUser.name)}`;
+  } else if (currentUser.location === 'longtan_wh') {
+    // 倉管共用 PC，不顯示個人姓名
+    display = `${icon} ${loc}`;
+  } else {
+    display = `${icon} ${loc} ${escapeHtml(currentUser.name)}`;
+  }
   targetEl.innerHTML = `
-    <span>👤 ${icon}${labelPart} ${escapeHtml(currentUser.name)}</span>
+    <span>👤 ${display}</span>
     <button class="change-btn" onclick="changeIdentity()">變更</button>
   `;
 }
@@ -490,9 +498,13 @@ function sourceBadgeHtml(source, name) {
   const cls = LOCATION_BADGE_CLASS[source];
   const icon = LOCATION_ICON[source];
   const loc = LOCATION_LABEL[source];
-  // admin 來源只顯示 icon + 姓名（不加「管理員」字樣，icon 已能辨識）
+  // admin 只顯示姓名（icon 已能辨識）
   if (source === 'admin') {
     return `<span class="badge ${cls}">${icon} ${escapeHtml(name)}</span>`;
+  }
+  // 倉管：共用 PC，不顯示個人姓名，只顯示「龍潭倉管」
+  if (source === 'longtan_wh') {
+    return `<span class="badge ${cls}">${icon} ${loc}</span>`;
   }
   return `<span class="badge ${cls}">${icon} ${loc} ${escapeHtml(name)}</span>`;
 }

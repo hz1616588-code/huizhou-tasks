@@ -213,11 +213,11 @@ function renderTaskCardForWarehouse(t) {
       </div>
       ${t.description ? `<div class="task-body">${escapeHtml(t.description)}</div>` : ''}
       ${photos ? `<div class="task-photos">${photos}</div>` : ''}
-      <div class="task-actions">
-        <input type="text" class="form-control note-input" placeholder="完成備註（可選，例：黑貓 123456789）" data-id="${t.id}">
-        <button class="btn btn-success complete-btn" data-id="${t.id}">✅ 完成</button>
-      </div>
       ${renderCommentsSection(t, t._comment_count || 0)}
+      <div class="task-actions" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <input type="text" class="form-control note-input" placeholder="完成備註（可選，例：黑貓 123456789）" data-id="${t.id}">
+        <button class="btn btn-success complete-btn" data-id="${t.id}">✅ 完成此單</button>
+      </div>
     </div>
   `;
 }
