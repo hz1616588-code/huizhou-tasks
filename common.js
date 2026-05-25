@@ -531,19 +531,14 @@ function setupNotifPanelToggle(bellBtn, panel) {
 // 渲染對話區塊（包含 toggle、訊息列表、輸入區）
 function renderCommentsSection(task, commentCount = 0) {
   const locked = task.status === 'cancelled';
-  const hasComments = commentCount > 0;
-  const labelText = hasComments
-    ? `對話討論 <span class="comments-count">${commentCount}</span> 則`
-    : `<span class="comments-label">點我對話討論</span><span class="comments-hint">— 客服 ⇄ 倉管 可即時互傳訊息與照片</span> <span class="comments-count">0</span>`;
+  // 預設展開（is-open + open），輸入框 + 送出鈕變成卡片主要互動區
   return `
     <div class="comments-section" data-task-id="${task.id}">
-      <button type="button" class="comments-toggle">
-        ${labelText}
+      <button type="button" class="comments-toggle is-open">
+        💬 對話 ${commentCount > 0 ? `<span class="comments-count">${commentCount}</span> 則` : '<span class="text-muted" style="font-weight:400">（還沒有訊息）</span>'}
       </button>
-      <div class="comments-body">
-        <div class="comment-list">
-          <div class="text-muted text-center" style="font-size:12px;padding:8px">載入中...</div>
-        </div>
+      <div class="comments-body open">
+        <div class="comment-list">${commentCount > 0 ? '<div class="text-muted text-center" style="font-size:12px;padding:8px">載入中...</div>' : ''}</div>
         ${locked ? `
           <div class="comments-locked">🚫 此工單已作廢，無法繼續留言</div>
         ` : `
@@ -664,25 +659,34 @@ function bindCommentsEvents(cardEl, opts = {}) {
 
   let loaded = false;
 
+  async function openAndLoad() {
+    if (loaded) return;
+    loaded = true;
+    const count = parseInt(section.querySelector('.comments-count')?.textContent || '0', 10);
+    if (count > 0) {
+      await loadCommentsForCard(cardEl);
+    }
+    // 標記此 task 留言為已讀
+    const taskId = section.getAttribute('data-task-id');
+    if (currentUser && taskId) {
+      toggle?.classList.remove('has-unread');
+      await markRead(taskId, 'comment');
+      if (typeof window.refreshNotifications === 'function') {
+        window.refreshNotifications();
+      }
+    }
+  }
+
+  // 預設就是開的 → 立刻載入
+  if (body.classList.contains('open')) {
+    openAndLoad();
+  }
+
   toggle?.addEventListener('click', async () => {
     body.classList.toggle('open');
     const isOpen = body.classList.contains('open');
     toggle.classList.toggle('is-open', isOpen);
-    if (isOpen) {
-      if (!loaded) {
-        loaded = true;
-        await loadCommentsForCard(cardEl);
-      }
-      // 標記此 task 留言為已讀（清掉 has-unread 樣式 + 同步雲端 + 更新鈴鐺）
-      const taskId = section.getAttribute('data-task-id');
-      if (currentUser && taskId) {
-        toggle.classList.remove('has-unread');
-        await markRead(taskId, 'comment');
-        if (typeof window.refreshNotifications === 'function') {
-          window.refreshNotifications();
-        }
-      }
-    }
+    if (isOpen) await openAndLoad();
   });
 
   if (photoInput) {

@@ -214,9 +214,8 @@ function renderTaskCardForWarehouse(t) {
       ${t.description ? `<div class="task-body">${escapeHtml(t.description)}</div>` : ''}
       ${photos ? `<div class="task-photos">${photos}</div>` : ''}
       ${renderCommentsSection(t, t._comment_count || 0)}
-      <div class="task-actions" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-        <input type="text" class="form-control note-input" placeholder="完成備註（可選，例：黑貓 123456789）" data-id="${t.id}">
-        <button class="btn btn-success complete-btn" data-id="${t.id}">✅ 完成此單</button>
+      <div class="task-actions" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);justify-content:flex-end">
+        <button class="btn btn-success btn-sm complete-btn" data-id="${t.id}">✅ 完成此單</button>
       </div>
     </div>
   `;
@@ -247,11 +246,7 @@ function bindCardEvents(container) {
     img.addEventListener('click', () => openLightbox(img.getAttribute('data-url')));
   });
   container.querySelectorAll('.complete-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-id');
-      const noteInput = container.querySelector(`.note-input[data-id="${id}"]`);
-      completeTask(id, noteInput ? noteInput.value.trim() : '');
-    });
+    btn.addEventListener('click', () => completeTask(btn.getAttribute('data-id')));
   });
   container.querySelectorAll('.task-card').forEach(card => bindCommentsEvents(card));
 }
@@ -307,7 +302,9 @@ async function handleSubmitTask(e) {
   }
 }
 
-async function completeTask(taskId, note) {
+async function completeTask(taskId) {
+  const note = prompt('要把這張工單標記為「完成」嗎？\n\n可填完成備註（例：黑貓 123456789），按取消則不完成：');
+  if (note === null) return;
   const btn = document.querySelector(`.complete-btn[data-id="${taskId}"]`);
   if (btn) { btn.disabled = true; btn.textContent = '處理中...'; }
 
@@ -318,7 +315,7 @@ async function completeTask(taskId, note) {
       completed_at: new Date().toISOString(),
       completed_by_user_id: currentUser.id,
       completed_by_name: currentUser.name,
-      completion_note: note || null
+      completion_note: (note || '').trim() || null
     })
     .eq('id', taskId)
     .eq('status', 'pending')
@@ -326,7 +323,7 @@ async function completeTask(taskId, note) {
 
   if (error) {
     alert('完成失敗：' + error.message);
-    if (btn) { btn.disabled = false; btn.textContent = '✅ 完成'; }
+    if (btn) { btn.disabled = false; btn.textContent = '✅ 完成此單'; }
     return;
   }
   if (!data || data.length === 0) {

@@ -409,11 +409,10 @@ function renderAdminCard(t, withActions) {
   let actions = '';
   if (withActions && t.status === 'pending') {
     actions = `
-      <div class="task-actions" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-        <input type="text" class="form-control note-input" placeholder="完成備註（可選）" data-id="${t.id}">
-        <button class="btn btn-success btn-sm complete-btn" data-id="${t.id}">✅ 完成此單</button>
+      <div class="task-actions" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);justify-content:flex-end;gap:6px">
         <button class="btn btn-ghost btn-sm edit-btn" data-id="${t.id}">✏️ 編輯</button>
         <button class="btn btn-danger btn-sm cancel-btn" data-id="${t.id}">🚫 作廢</button>
+        <button class="btn btn-success btn-sm complete-btn" data-id="${t.id}">✅ 完成此單</button>
       </div>
     `;
   }
@@ -446,11 +445,7 @@ function bindCardEvents(container) {
     img.addEventListener('click', () => openLightbox(img.getAttribute('data-url')));
   });
   container.querySelectorAll('.complete-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-id');
-      const noteInput = container.querySelector(`.note-input[data-id="${id}"]`);
-      completeTask(id, noteInput ? noteInput.value.trim() : '');
-    });
+    btn.addEventListener('click', () => completeTask(btn.getAttribute('data-id')));
   });
   container.querySelectorAll('.cancel-btn').forEach(btn => {
     btn.addEventListener('click', () => cancelTask(btn.getAttribute('data-id')));
@@ -517,7 +512,9 @@ async function handleNewTask(e) {
 }
 
 // ============ 代完成 ============
-async function completeTask(taskId, note) {
+async function completeTask(taskId) {
+  const note = prompt('要把這張工單標記為「完成」嗎？\n\n可填完成備註，按取消則不完成：');
+  if (note === null) return;
   const { data, error } = await supabase
     .from('tasks')
     .update({
@@ -525,7 +522,7 @@ async function completeTask(taskId, note) {
       completed_at: new Date().toISOString(),
       completed_by_user_id: currentUser.id,
       completed_by_name: currentUser.name,
-      completion_note: note || null
+      completion_note: (note || '').trim() || null
     })
     .eq('id', taskId)
     .eq('status', 'pending')
